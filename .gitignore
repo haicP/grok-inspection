@@ -1,0 +1,10 @@
+/dist/
+/*.dll
+/*.dylib
+/*.h
+/*.so
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

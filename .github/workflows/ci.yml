@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.x"
+          cache: false
+      - name: Test
+        run: go test ./... -count=1
+      - name: Build Linux plugin
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=1 go build \
+            -buildvcs=false \
+            -buildmode=c-shared \
+            -o dist/grok-inspection.so \
+            .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grok-inspection-linux-amd64
+          path: dist/grok-inspection.so

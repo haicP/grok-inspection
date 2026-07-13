@@ -17,6 +17,12 @@ import (
 	"grok-inspection/cpasdk/pluginapi"
 )
 
+const (
+	defaultWorkers = 6
+	minWorkers     = 1
+	maxWorkers     = 16
+)
+
 type accountResult struct {
 	AuthIndex      string `json:"auth_index"`
 	Name           string `json:"name"`
@@ -36,6 +42,7 @@ type jobSnapshot struct {
 	Running         bool            `json:"running"`
 	Stopped         bool            `json:"stopped"`
 	Applying        bool            `json:"applying"`
+	Incremental     bool            `json:"incremental"`
 	Done            int             `json:"done"`
 	Total           int             `json:"total"`
 	Workers         int             `json:"workers"`
@@ -44,21 +51,30 @@ type jobSnapshot struct {
 	ApplyDone       int             `json:"apply_done"`
 	ApplyTotal      int             `json:"apply_total"`
 	ApplyCurrent    string          `json:"apply_current,omitempty"`
+	ApplyFailures   []string        `json:"apply_failures,omitempty"`
 	StartedAt       string          `json:"started_at,omitempty"`
 	FinishedAt      string          `json:"finished_at,omitempty"`
 	Results         []accountResult `json:"results"`
 	Summary         map[string]int  `json:"summary"`
+	StorePath       string          `json:"store_path,omitempty"`
 }
 
 type startRequest struct {
 	Workers         int  `json:"workers"`
 	IncludeDisabled bool `json:"include_disabled"`
 	OnlyDisabled    bool `json:"only_disabled"`
+	// Incremental only probes Auth accounts not already present in the last results.
+	Incremental bool `json:"incremental"`
 }
 
 type applyRequest struct {
-	// empty body means apply all recommended disable/enable actions
-	AuthIndexes []string `json:"auth_indexes"`
+	// empty AuthIndexes means apply all matching recommended actions (when ForceAction empty)
+	AuthIndexes     []string `json:"auth_indexes"`
+	Actions         []string `json:"actions"`         // optional: disable/enable/delete (recommended only)
+	Classifications []string `json:"classifications"` // optional: reauth/healthy/...
+	// ForceAction overrides recommended action for selected accounts.
+	// Used by filter-based bulk disable/delete. Values: disable | enable | delete
+	ForceAction string `json:"force_action"`
 }
 
 type actionRequest struct {
@@ -78,20 +94,89 @@ type inspectionEngine struct {
 	running         bool
 	stopped         bool
 	applying        bool
+	incremental     bool
 	runID           uint64
 	workers         int
 	includeDisabled bool
 	onlyDisabled    bool
 	total           int
+	probeDone       int // probes completed in the current run (full or incremental)
 	results         []accountResult
 	applyDone       int
 	applyTotal      int
 	applyCurrent    string
+	applyFailures   []string
 	startedAt       time.Time
 	finishedAt      time.Time
 }
 
-var engine = &inspectionEngine{workers: 6}
+var engine = &inspectionEngine{workers: defaultWorkers}
+
+func init() {
+	engine.loadFromDisk()
+}
+
+func normalizeWorkers(workers int) (int, error) {
+	if workers == 0 {
+		return defaultWorkers, nil
+	}
+	if workers < minWorkers || workers > maxWorkers {
+		return 0, fmt.Errorf("workers must be an integer between %d and %d", minWorkers, maxWorkers)
+	}
+	return workers, nil
+}
+
+func (e *inspectionEngine) loadFromDisk() {
+	snap, err := loadPersistedSnapshot()
+	if err != nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.running || e.applying {
+		return
+	}
+	e.results = append([]accountResult(nil), snap.Results...)
+	if snap.Workers >= minWorkers && snap.Workers <= maxWorkers {
+		e.workers = snap.Workers
+	}
+	e.includeDisabled = snap.IncludeDisabled
+	e.onlyDisabled = snap.OnlyDisabled
+	e.total = len(snap.Results)
+	if snap.StartedAt != "" {
+		if t, errParse := time.Parse(time.RFC3339, snap.StartedAt); errParse == nil {
+			e.startedAt = t
+		}
+	}
+	if snap.FinishedAt != "" {
+		if t, errParse := time.Parse(time.RFC3339, snap.FinishedAt); errParse == nil {
+			e.finishedAt = t
+		}
+	}
+}
+
+func (e *inspectionEngine) persistLocked() {
+	snap := persistedSnapshot{
+		Workers:         e.workers,
+		IncludeDisabled: e.includeDisabled,
+		OnlyDisabled:    e.onlyDisabled,
+		Results:         append([]accountResult(nil), e.results...),
+	}
+	if !e.startedAt.IsZero() {
+		snap.StartedAt = e.startedAt.Format(time.RFC3339)
+	}
+	if !e.finishedAt.IsZero() {
+		snap.FinishedAt = e.finishedAt.Format(time.RFC3339)
+	}
+	// Best-effort; status API must never fail because of disk errors.
+	_ = savePersistedSnapshot(snap)
+}
+
+func (e *inspectionEngine) persist() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.persistLocked()
+}
 
 func (e *inspectionEngine) snapshot() jobSnapshot {
 	e.mu.Lock()
@@ -123,7 +208,8 @@ func (e *inspectionEngine) snapshot() jobSnapshot {
 		Running:         e.running,
 		Stopped:         e.stopped && !e.running,
 		Applying:        e.applying,
-		Done:            len(results),
+		Incremental:     e.incremental,
+		Done:            e.probeDone,
 		Total:           e.total,
 		Workers:         e.workers,
 		IncludeDisabled: e.includeDisabled,
@@ -131,8 +217,10 @@ func (e *inspectionEngine) snapshot() jobSnapshot {
 		ApplyDone:       e.applyDone,
 		ApplyTotal:      e.applyTotal,
 		ApplyCurrent:    e.applyCurrent,
+		ApplyFailures:   append([]string(nil), e.applyFailures...),
 		Results:         results,
 		Summary:         summary,
+		StorePath:       storeFilePath(),
 	}
 	if !e.startedAt.IsZero() {
 		snap.StartedAt = e.startedAt.Format(time.RFC3339)
@@ -144,17 +232,19 @@ func (e *inspectionEngine) snapshot() jobSnapshot {
 }
 
 func (e *inspectionEngine) start(req startRequest) error {
+	workers, errWorkers := normalizeWorkers(req.Workers)
+	if errWorkers != nil {
+		return errWorkers
+	}
+
 	e.mu.Lock()
 	if e.running || e.applying {
 		e.mu.Unlock()
 		return fmt.Errorf("inspection already running")
 	}
-	workers := req.Workers
-	if workers <= 0 {
-		workers = 6
-	}
-	if workers > 16 {
-		workers = 16
+	if req.Incremental && len(e.results) == 0 {
+		e.mu.Unlock()
+		return fmt.Errorf("增量巡检需要已有结果，请先完整巡检")
 	}
 	includeDisabled := req.IncludeDisabled
 	onlyDisabled := req.OnlyDisabled
@@ -164,24 +254,31 @@ func (e *inspectionEngine) start(req startRequest) error {
 	e.running = true
 	e.stopped = false
 	e.applying = false
+	e.incremental = req.Incremental
 	e.workers = workers
 	e.includeDisabled = includeDisabled
 	e.onlyDisabled = onlyDisabled
-	e.results = nil
+	if !req.Incremental {
+		e.results = nil
+	}
 	e.total = 0
+	e.probeDone = 0
 	e.applyDone = 0
 	e.applyTotal = 0
 	e.applyCurrent = ""
+	e.applyFailures = nil
 	e.startedAt = time.Now()
 	e.finishedAt = time.Time{}
 	e.runID++
 	runID := e.runID
+	incremental := req.Incremental
+	e.persistLocked()
 	e.mu.Unlock()
 
 	e.runWG.Add(1)
 	go func() {
 		defer e.runWG.Done()
-		e.run(runID, workers, includeDisabled, onlyDisabled)
+		e.run(runID, workers, includeDisabled, onlyDisabled, incremental)
 	}()
 	return nil
 }
@@ -213,6 +310,11 @@ func (e *inspectionEngine) appendResult(runID uint64, result accountResult) {
 		return
 	}
 	e.results = append(e.results, result)
+	e.probeDone++
+	// Periodic flush so a crash mid-run still keeps partial progress.
+	if e.probeDone%10 == 0 {
+		e.persistLocked()
+	}
 }
 
 func (e *inspectionEngine) finish(runID uint64) {
@@ -223,9 +325,65 @@ func (e *inspectionEngine) finish(runID uint64) {
 	}
 	e.running = false
 	e.finishedAt = time.Now()
+	e.persistLocked()
 }
 
-func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyDisabled bool) {
+// knownResultKeys builds identity keys from already-inspected rows so incremental
+// mode can skip Auth accounts that appear in the last results.
+func knownResultKeys(results []accountResult) map[string]struct{} {
+	set := make(map[string]struct{}, len(results)*3)
+	for _, item := range results {
+		for _, key := range accountIdentityKeys(item.AuthIndex, item.FileName, item.Email, item.Name) {
+			set[key] = struct{}{}
+		}
+	}
+	return set
+}
+
+func accountIdentityKeys(authIndex, fileName, email, name string) []string {
+	keys := make([]string, 0, 4)
+	if v := strings.TrimSpace(authIndex); v != "" {
+		keys = append(keys, "ai:"+v)
+	}
+	if v := strings.ToLower(strings.TrimSpace(fileName)); v != "" {
+		keys = append(keys, "fn:"+v)
+	}
+	if v := strings.ToLower(strings.TrimSpace(email)); v != "" {
+		keys = append(keys, "em:"+v)
+	}
+	if v := strings.ToLower(strings.TrimSpace(name)); v != "" {
+		keys = append(keys, "nm:"+v)
+	}
+	return keys
+}
+
+func entryIsKnown(known map[string]struct{}, file pluginapi.HostAuthFileEntry) bool {
+	for _, key := range accountIdentityKeys(file.AuthIndex, file.Name, file.Email, firstNonEmpty(file.Email, file.Label, file.Name, file.AuthIndex, file.ID)) {
+		if _, ok := known[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func filterNewAuthEntries(files []pluginapi.HostAuthFileEntry, known map[string]struct{}, includeDisabled, onlyDisabled bool) []pluginapi.HostAuthFileEntry {
+	targets := make([]pluginapi.HostAuthFileEntry, 0)
+	for _, file := range files {
+		if !shouldInspectEntry(file.Provider, file.Name, file.Type, file.Disabled, file.Status, includeDisabled, onlyDisabled) {
+			continue
+		}
+		if entryIsKnown(known, file) {
+			continue
+		}
+		targets = append(targets, file)
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		return strings.ToLower(targets[i].Name) < strings.ToLower(targets[j].Name)
+	})
+	return targets
+}
+
+func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyDisabled, incremental bool) {
 	defer e.finish(runID)
 
 	list, errList := callHostAuthList()
@@ -239,15 +397,27 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 		return
 	}
 
-	targets := make([]pluginapi.HostAuthFileEntry, 0)
-	for _, file := range list.Files {
-		if shouldInspectEntry(file.Provider, file.Name, file.Type, file.Disabled, file.Status, includeDisabled, onlyDisabled) {
-			targets = append(targets, file)
-		}
+	var known map[string]struct{}
+	if incremental {
+		e.mu.Lock()
+		known = knownResultKeys(e.results)
+		e.mu.Unlock()
 	}
-	sort.Slice(targets, func(i, j int) bool {
-		return strings.ToLower(targets[i].Name) < strings.ToLower(targets[j].Name)
-	})
+
+	var targets []pluginapi.HostAuthFileEntry
+	if incremental {
+		targets = filterNewAuthEntries(list.Files, known, includeDisabled, onlyDisabled)
+	} else {
+		targets = make([]pluginapi.HostAuthFileEntry, 0)
+		for _, file := range list.Files {
+			if shouldInspectEntry(file.Provider, file.Name, file.Type, file.Disabled, file.Status, includeDisabled, onlyDisabled) {
+				targets = append(targets, file)
+			}
+		}
+		sort.Slice(targets, func(i, j int) bool {
+			return strings.ToLower(targets[i].Name) < strings.ToLower(targets[j].Name)
+		})
+	}
 
 	e.mu.Lock()
 	if e.runID == runID {
@@ -368,7 +538,6 @@ func xaiInspectionHeaders(token string, jsonBody bool) http.Header {
 }
 
 func callHostAPICall(authIndex, method, rawURL string, body []byte, jsonBody bool) (apiCallResponse, error) {
-	// Prefer host.http.do with resolved token from auth JSON.
 	token, errToken := resolveAccessToken(authIndex)
 	if errToken != nil {
 		return apiCallResponse{}, errToken
@@ -387,11 +556,7 @@ func callHostAPICall(authIndex, method, rawURL string, body []byte, jsonBody boo
 		Headers    map[string][]string `json:"Headers"`
 		Body       []byte              `json:"Body"`
 	}
-	// host returns pluginapi.HTTPResponse with capital fields through JSON marshal of struct tags? check tags
-	// pluginapi.HTTPResponse uses StatusCode/Headers/Body with no lowercase tags in type definition;
-	// encoding/json will use field names StatusCode, Headers, Body.
 	if err := json.Unmarshal(result, &resp); err != nil {
-		// try lowercase just in case
 		var alt apiCallResponse
 		if errAlt := json.Unmarshal(result, &alt); errAlt == nil {
 			return alt, nil
@@ -438,86 +603,12 @@ func callHostAuthList() (authListResponse, error) {
 	return resp, nil
 }
 
-func setAuthDisabledLegacy(name string, disabled bool) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("name is required")
-	}
-	// load physical json, flip disabled, save back
-	list, errList := callHostAuthList()
-	if errList != nil {
-		return errList
-	}
-	var target *pluginapi.HostAuthFileEntry
-	for i := range list.Files {
-		file := list.Files[i]
-		if file.Name == name || file.ID == name || file.AuthIndex == name || file.Email == name {
-			target = &file
-			break
-		}
-	}
-	if target == nil {
-		return fmt.Errorf("auth not found: %s", name)
-	}
-	if strings.TrimSpace(target.AuthIndex) == "" {
-		return fmt.Errorf("auth_index missing for %s", name)
-	}
-	getResult, errGet := callHost(pluginabi.MethodHostAuthGet, pluginapi.HostAuthGetRequest{AuthIndex: target.AuthIndex})
-	if errGet != nil {
-		return errGet
-	}
-	var getResp pluginapi.HostAuthGetResponse
-	if err := json.Unmarshal(getResult, &getResp); err != nil {
-		return fmt.Errorf("decode host.auth.get: %w", err)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(getResp.JSON, &payload); err != nil {
-		return fmt.Errorf("decode auth json: %w", err)
-	}
-	payload["disabled"] = disabled
-	raw, errMarshal := json.Marshal(payload)
-	if errMarshal != nil {
-		return errMarshal
-	}
-	saveName := firstNonEmpty(getResp.Name, target.Name)
-	if !strings.HasSuffix(strings.ToLower(saveName), ".json") {
-		saveName += ".json"
-	}
-	_, errSave := callHost(pluginabi.MethodHostAuthSave, pluginapi.HostAuthSaveRequest{
-		Name: saveName,
-		JSON: raw,
-	})
-	if errSave != nil {
-		return errSave
-	}
-	// reflect in current results
-	engine.mu.Lock()
-	for i := range engine.results {
-		item := &engine.results[i]
-		if item.AuthIndex == target.AuthIndex || item.Name == target.Name || item.Name == name {
-			item.Disabled = disabled
-			if disabled && (item.Action == "disable") {
-				item.Action = "keep"
-			}
-			if !disabled && item.Action == "enable" {
-				item.Action = "keep"
-			}
-			if !disabled && item.Classification == "healthy" {
-				item.Action = "keep"
-			}
-			if disabled && item.Classification == "healthy" {
-				item.Action = "enable"
-				item.Disabled = true
-			}
-		}
-	}
-	engine.mu.Unlock()
-	return nil
-}
-
 var (
 	cpaManagementBaseURL = "http://127.0.0.1:8317"
-	cpaManagementDo      = http.DefaultClient.Do
+	cpaManagementClient  = &http.Client{Timeout: 8 * time.Second}
+	cpaManagementDo      = func(req *http.Request) (*http.Response, error) {
+		return cpaManagementClient.Do(req)
+	}
 )
 
 func cpaManagementPassword() string {
@@ -592,7 +683,7 @@ func callCPAManagementWithAuth(method, path string, body []byte, password string
 		password = resolveManagementPassword(headers)
 	}
 	if password == "" {
-		return 0, nil, fmt.Errorf("CPA management password is unavailable")
+		return 0, nil, fmt.Errorf("CPA management password is unavailable (set MANAGEMENT_PASSWORD on CPA process)")
 	}
 	baseURL := resolveManagementBaseURL(headers)
 	req, errRequest := http.NewRequest(method, strings.TrimRight(baseURL, "/")+path, bytes.NewReader(body))
@@ -637,43 +728,43 @@ func findAuthFile(name string) (*pluginapi.HostAuthFileEntry, error) {
 	return nil, fmt.Errorf("auth not found: %s", name)
 }
 
-func verifyAuthDisabled(authIndex, name string, disabled bool) error {
-	list, errList := callHostAuthList()
-	if errList != nil {
-		return errList
-	}
-	for _, file := range list.Files {
-		if file.AuthIndex == authIndex || file.Name == name || file.ID == name || file.Email == name {
-			actual := file.Disabled || isDisabledEntry(file.Disabled, file.Status)
-			if actual != disabled {
-				return fmt.Errorf("CPA state verification failed for %s: disabled=%v, expected=%v", name, actual, disabled)
-			}
-			return nil
-		}
-	}
-	return fmt.Errorf("auth disappeared while verifying %s", name)
-}
-
-func setAuthDisabled(name string, disabled bool, password string, headers http.Header) error {
+// setAuthDisabled uses host.auth callbacks only — never re-enters CPA Management HTTP,
+// which would deadlock when called from management.handle.
+func setAuthDisabled(name string, disabled bool) error {
 	target, errTarget := findAuthFile(name)
 	if errTarget != nil {
 		return errTarget
 	}
-	if strings.TrimSpace(target.Name) == "" {
-		return fmt.Errorf("auth file name missing for %s", name)
+	if strings.TrimSpace(target.AuthIndex) == "" {
+		return fmt.Errorf("auth_index missing for %s", name)
 	}
-	body, errMarshal := json.Marshal(map[string]any{
-		"name":     target.Name,
-		"disabled": disabled,
-	})
+	getResult, errGet := callHost(pluginabi.MethodHostAuthGet, pluginapi.HostAuthGetRequest{AuthIndex: target.AuthIndex})
+	if errGet != nil {
+		return errGet
+	}
+	var getResp pluginapi.HostAuthGetResponse
+	if err := json.Unmarshal(getResult, &getResp); err != nil {
+		return fmt.Errorf("decode host.auth.get: %w", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(getResp.JSON, &payload); err != nil {
+		return fmt.Errorf("decode auth json: %w", err)
+	}
+	payload["disabled"] = disabled
+	raw, errMarshal := json.Marshal(payload)
 	if errMarshal != nil {
 		return errMarshal
 	}
-	if _, _, errPatch := callCPAManagementWithAuth(http.MethodPatch, "/v0/management/auth-files/status", body, password, headers); errPatch != nil {
-		return errPatch
+	saveName := firstNonEmpty(getResp.Name, target.Name)
+	if !strings.HasSuffix(strings.ToLower(saveName), ".json") {
+		saveName += ".json"
 	}
-	if errVerify := verifyAuthDisabled(target.AuthIndex, target.Name, disabled); errVerify != nil {
-		return errVerify
+	_, errSave := callHost(pluginabi.MethodHostAuthSave, pluginapi.HostAuthSaveRequest{
+		Name: saveName,
+		JSON: raw,
+	})
+	if errSave != nil {
+		return errSave
 	}
 	engine.mu.Lock()
 	for i := range engine.results {
@@ -691,21 +782,68 @@ func setAuthDisabled(name string, disabled bool, password string, headers http.H
 			}
 		}
 	}
+	engine.persistLocked()
 	engine.mu.Unlock()
 	return nil
 }
 
+func resultMatchesTarget(item accountResult, target *pluginapi.HostAuthFileEntry, name string) bool {
+	name = strings.TrimSpace(name)
+	if target != nil {
+		if item.AuthIndex != "" && item.AuthIndex == target.AuthIndex {
+			return true
+		}
+		if item.FileName != "" && (item.FileName == target.Name || item.FileName == target.ID) {
+			return true
+		}
+		if item.Name != "" && (item.Name == target.Name || item.Name == target.Email || item.Name == target.ID) {
+			return true
+		}
+	}
+	if name == "" {
+		return false
+	}
+	return item.AuthIndex == name || item.FileName == name || item.Name == name || item.Email == name
+}
+
+// removeResultLocked drops matching rows from the in-memory list. Caller must hold e.mu.
+func (e *inspectionEngine) removeResultLocked(target *pluginapi.HostAuthFileEntry, name string) {
+	kept := make([]accountResult, 0, len(e.results))
+	for _, item := range e.results {
+		if resultMatchesTarget(item, target, name) {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	e.results = kept
+	if !e.running {
+		e.total = len(e.results)
+	}
+}
+
+// deleteAuthFile must only be called from a background goroutine after management.handle
+// has returned, so it does not deadlock on the management lock.
+// It deletes the CPA Auth credential file AND removes the row from local JSON results.
+// password/headers come from the page Management Key (or env fallbacks) so third-party
+// installs work without MANAGEMENT_PASSWORD on the process.
 func deleteAuthFile(name string, password string, headers http.Header) error {
 	target, errTarget := findAuthFile(name)
 	if errTarget != nil {
 		// Idempotent: already gone counts as success for delete recommendations.
 		if strings.Contains(errTarget.Error(), "auth not found") {
-			removeResultByIdentity(name, "", "")
+			engine.mu.Lock()
+			engine.removeResultLocked(nil, name)
+			engine.persistLocked()
+			engine.mu.Unlock()
 			return nil
 		}
 		return errTarget
 	}
-	path := "/v0/management/auth-files?name=" + url.QueryEscape(target.Name)
+	fileName := firstNonEmpty(target.Name)
+	if fileName == "" {
+		return fmt.Errorf("auth file name missing for %s", name)
+	}
+	path := "/v0/management/auth-files?name=" + url.QueryEscape(fileName)
 	if _, _, errDelete := callCPAManagementWithAuth(http.MethodDelete, path, nil, password, headers); errDelete != nil {
 		// Some CPA builds return 404 after concurrent deletes; re-check presence.
 		if list, errList := callHostAuthList(); errList == nil {
@@ -717,7 +855,10 @@ func deleteAuthFile(name string, password string, headers http.Header) error {
 				}
 			}
 			if gone {
-				removeResultByIdentity(target.Name, target.AuthIndex, target.ID)
+				engine.mu.Lock()
+				engine.removeResultLocked(target, name)
+				engine.persistLocked()
+				engine.mu.Unlock()
 				return nil
 			}
 		}
@@ -732,104 +873,211 @@ func deleteAuthFile(name string, password string, headers http.Header) error {
 			return fmt.Errorf("CPA state verification failed: deleted auth still present as %s", file.Name)
 		}
 	}
-	removeResultByIdentity(target.Name, target.AuthIndex, target.ID)
+	// Auth gone → drop from live list + persist local JSON.
+	engine.mu.Lock()
+	engine.removeResultLocked(target, name)
+	engine.persistLocked()
+	engine.mu.Unlock()
 	return nil
 }
 
-func removeResultByIdentity(name, authIndex, id string) {
-	name = strings.TrimSpace(name)
-	authIndex = strings.TrimSpace(authIndex)
-	id = strings.TrimSpace(id)
-	engine.mu.Lock()
-	defer engine.mu.Unlock()
-	if len(engine.results) == 0 {
-		return
+func stringSet(values []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out[value] = struct{}{}
+		}
 	}
-	filtered := make([]accountResult, 0, len(engine.results))
-	for _, item := range engine.results {
-		if authIndex != "" && item.AuthIndex == authIndex {
-			continue
-		}
-		if name != "" && (item.FileName == name || item.Name == name || item.Email == name) {
-			continue
-		}
-		if id != "" && (item.FileName == id || item.AuthIndex == id) {
-			continue
-		}
-		filtered = append(filtered, item)
-	}
-	engine.results = filtered
+	return out
 }
 
-func (e *inspectionEngine) applyRecommendations(indexes []string, password string, headers http.Header) (map[string]any, error) {
-	e.mu.Lock()
-	if e.running || e.applying {
-		e.mu.Unlock()
-		return nil, fmt.Errorf("busy")
+func normalizeForceAction(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "", "disable", "enable", "delete":
+		return value, nil
+	default:
+		return "", fmt.Errorf("force_action must be disable, enable, or delete")
 	}
-	candidates := make([]accountResult, 0)
-	indexSet := map[string]struct{}{}
-	for _, idx := range indexes {
-		idx = strings.TrimSpace(idx)
-		if idx != "" {
-			indexSet[idx] = struct{}{}
+}
+
+func itemSelected(item accountResult, indexSet, classSet map[string]struct{}) bool {
+	if len(classSet) > 0 {
+		if _, ok := classSet[item.Classification]; !ok {
+			return false
 		}
 	}
+	if len(indexSet) == 0 {
+		return true
+	}
+	if _, ok := indexSet[item.AuthIndex]; ok {
+		return true
+	}
+	if _, ok := indexSet[item.Name]; ok {
+		return true
+	}
+	if _, ok := indexSet[item.FileName]; ok {
+		return true
+	}
+	if _, ok := indexSet[item.Email]; ok {
+		return true
+	}
+	return false
+}
+
+func (e *inspectionEngine) collectCandidates(req applyRequest) ([]accountResult, error) {
+	force, errForce := normalizeForceAction(req.ForceAction)
+	if errForce != nil {
+		return nil, errForce
+	}
+	indexSet := stringSet(req.AuthIndexes)
+	actionSet := stringSet(req.Actions)
+	classSet := stringSet(req.Classifications)
+	// Filter-based bulk ops must name targets (or classification) explicitly.
+	if force != "" && len(indexSet) == 0 && len(classSet) == 0 {
+		return nil, fmt.Errorf("force_action requires auth_indexes or classifications")
+	}
+
+	candidates := make([]accountResult, 0)
 	for _, item := range e.results {
+		if !itemSelected(item, indexSet, classSet) {
+			continue
+		}
+		if force != "" {
+			copied := item
+			copied.Action = force
+			candidates = append(candidates, copied)
+			continue
+		}
+		// Recommended-only mode (执行建议操作)
 		if item.Action != "disable" && item.Action != "enable" && item.Action != "delete" {
 			continue
 		}
-		if len(indexSet) > 0 {
-			if _, ok := indexSet[item.AuthIndex]; !ok {
-				if _, okName := indexSet[item.Name]; !okName {
-					continue
-				}
+		if len(actionSet) > 0 {
+			if _, ok := actionSet[item.Action]; !ok {
+				continue
 			}
 		}
 		candidates = append(candidates, item)
 	}
+	return candidates, nil
+}
+
+// startApply runs recommended or forced bulk actions asynchronously.
+// password/headers are captured for background delete calls (page Management Key).
+func (e *inspectionEngine) startApply(req applyRequest, password string, headers http.Header) error {
+	e.mu.Lock()
+	if e.running || e.applying {
+		e.mu.Unlock()
+		return fmt.Errorf("busy")
+	}
+	candidates, errCollect := e.collectCandidates(req)
+	if errCollect != nil {
+		e.mu.Unlock()
+		return errCollect
+	}
 	if len(candidates) == 0 {
 		e.mu.Unlock()
-		return nil, fmt.Errorf("no recommended actions")
+		if strings.TrimSpace(req.ForceAction) != "" {
+			return fmt.Errorf("no accounts matched current selection")
+		}
+		return fmt.Errorf("no recommended actions")
 	}
 	e.applying = true
 	e.applyDone = 0
 	e.applyTotal = len(candidates)
 	e.applyCurrent = ""
+	e.applyFailures = nil
 	e.mu.Unlock()
 
+	e.runWG.Add(1)
+	go func() {
+		defer e.runWG.Done()
+		e.runApply(candidates, password, headers)
+	}()
+	return nil
+}
+
+// startAction runs a single enable/disable/delete asynchronously.
+func (e *inspectionEngine) startAction(req actionRequest, password string, headers http.Header) error {
+	name := firstNonEmpty(req.Name, req.AuthIndex)
+	if name == "" {
+		return fmt.Errorf("name or auth_index required")
+	}
+	e.mu.Lock()
+	if e.running || e.applying {
+		e.mu.Unlock()
+		return fmt.Errorf("busy")
+	}
+	e.applying = true
+	e.applyDone = 0
+	e.applyTotal = 1
+	if req.Delete {
+		e.applyCurrent = "delete " + name
+	} else if req.Disabled {
+		e.applyCurrent = "disable " + name
+	} else {
+		e.applyCurrent = "enable " + name
+	}
+	e.applyFailures = nil
+	e.mu.Unlock()
+
+	e.runWG.Add(1)
+	go func() {
+		defer e.runWG.Done()
+		var errAction error
+		if req.Delete {
+			errAction = deleteAuthFile(name, password, headers)
+		} else {
+			errAction = setAuthDisabled(name, req.Disabled)
+		}
+		e.mu.Lock()
+		if errAction != nil {
+			e.applyFailures = []string{name + ": " + errAction.Error()}
+		}
+		e.applyDone = 1
+		e.applying = false
+		e.applyCurrent = ""
+		e.persistLocked()
+		e.mu.Unlock()
+	}()
+	return nil
+}
+
+func (e *inspectionEngine) runApply(candidates []accountResult, password string, headers http.Header) {
 	defer func() {
 		e.mu.Lock()
 		e.applying = false
 		e.applyCurrent = ""
+		e.persistLocked()
 		e.mu.Unlock()
 	}()
 
-	success := 0
 	failures := make([]string, 0)
 	for _, item := range candidates {
 		e.mu.Lock()
 		e.applyCurrent = item.Action + " " + item.Name
 		e.mu.Unlock()
-		targetName := firstNonEmpty(item.FileName, item.AuthIndex, item.Name)
+		// Prefer physical auth file name so CPA Auth dir entry is deleted correctly.
+		targetName := firstNonEmpty(item.FileName, item.AuthIndex, item.Name, item.Email)
 		var errAction error
-		if item.Action == "delete" {
+		switch item.Action {
+		case "delete":
 			errAction = deleteAuthFile(targetName, password, headers)
-		} else {
-			errAction = setAuthDisabled(targetName, item.Action == "disable", password, headers)
-		}
-		if errAction != nil {
-			failures = append(failures, item.Name+": "+errAction.Error())
-		} else {
-			success++
+		case "disable":
+			errAction = setAuthDisabled(targetName, true)
+		case "enable":
+			errAction = setAuthDisabled(targetName, false)
+		default:
+			errAction = fmt.Errorf("unsupported action %q", item.Action)
 		}
 		e.mu.Lock()
+		if errAction != nil {
+			failures = append(failures, item.Name+": "+errAction.Error())
+			e.applyFailures = append([]string(nil), failures...)
+		}
 		e.applyDone++
 		e.mu.Unlock()
 	}
-	return map[string]any{
-		"success":  success,
-		"failed":   len(failures),
-		"failures": failures,
-	}, nil
 }

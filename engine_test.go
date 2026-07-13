@@ -4,7 +4,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
+	"time"
+
+	"grok-inspection/cpasdk/pluginapi"
 )
 
 func TestCallCPAManagementUsesBearerPasswordAndJSON(t *testing.T) {
@@ -44,7 +48,6 @@ func TestCallCPAManagementUsesBearerPasswordAndJSON(t *testing.T) {
 		t.Fatalf("status = %d", status)
 	}
 }
-
 
 func TestResolveManagementPasswordPrefersRequestBearer(t *testing.T) {
 	oldPassword := os.Getenv("MANAGEMENT_PASSWORD")
@@ -120,4 +123,65 @@ func TestResolveManagementBaseURLIgnoresRequestHostPort(t *testing.T) {
 	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:9999" {
 		t.Fatalf("env base url = %q", got)
 	}
+}
+
+func TestStartRejectsInvalidWorkers(t *testing.T) {
+	e := &inspectionEngine{workers: defaultWorkers}
+	err := e.start(startRequest{Workers: 99})
+	if err == nil || !strings.Contains(err.Error(), "workers must") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestIncrementalStartRequiresExistingResults(t *testing.T) {
+	e := &inspectionEngine{workers: defaultWorkers}
+	err := e.start(startRequest{Workers: 2, Incremental: true})
+	if err == nil || !strings.Contains(err.Error(), "增量巡检") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestApplyIsAsyncAndStatusStaysResponsive(t *testing.T) {
+	dir := t.TempDir()
+	setStoreFilePathForTest(dir + string(os.PathSeparator) + "results.json")
+	t.Cleanup(func() { setStoreFilePathForTest("") })
+
+	old := engine
+	engine = &inspectionEngine{
+		workers: defaultWorkers,
+		results: []accountResult{
+			{Name: "need-reauth", AuthIndex: "a1", FileName: "a1.json", Classification: "reauth", Action: "delete"},
+		},
+	}
+	t.Cleanup(func() {
+		engine.runWG.Wait()
+		engine = old
+	})
+
+	begin := time.Now()
+	if err := engine.startApply(applyRequest{
+		ForceAction: "delete",
+		AuthIndexes: []string{"a1"},
+	}, "page-password", nil); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(begin) > 100*time.Millisecond {
+		t.Fatalf("startApply should return immediately, took %s", time.Since(begin))
+	}
+	snap := engine.snapshot()
+	if !snap.Applying {
+		t.Fatal("expected applying=true")
+	}
+	// status path is pure memory and must not wait on apply/delete work
+	resp := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/management/plugins/grok-inspection/status",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status code = %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(resp.Body), `"applying":true`) {
+		t.Fatalf("status body missing applying=true: %s", string(resp.Body))
+	}
+	engine.runWG.Wait()
 }

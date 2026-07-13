@@ -73,3 +73,47 @@ func TestResourcePageShowsManagementKeyPrompt(t *testing.T) {
 		}
 	}
 }
+
+func TestResourcePageHasExportAndBatchOps(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	required := []string{
+		`id="workers"`,
+		`value="6"`,
+		`parseWorkersStrict`,
+		`id="exportJsonBtn"`,
+		`id="exportTxtBtn"`,
+		`id="batchDisableBtn"`,
+		`id="batchDeleteBtn"`,
+		`force_action: action`,
+		`filteredAuthIndexes`,
+		`批量禁用`,
+		`批量删除`,
+		`function stopPolling()`,
+		`function startPolling()`,
+		`function syncPolling(snap)`,
+		`snap.running || snap.applying`,
+		`id="incrBtn"`,
+		`增量巡检`,
+		`incremental: !!incremental`,
+	}
+	for _, marker := range required {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("resource page missing marker %q", marker)
+		}
+	}
+	if strings.Contains(page, `setInterval(refresh, 1500)`) {
+		t.Fatal("page must not permanently poll /status every 1.5s when idle")
+	}
+}
+
+func TestApplyAcceptedAsync(t *testing.T) {
+	// Without candidates, apply returns conflict quickly (no hang).
+	response := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodPost,
+		Path:   "/v0/management/plugins/grok-inspection/apply",
+		Body:   []byte(`{}`),
+	})
+	if response.StatusCode != http.StatusConflict && response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d body=%s", response.StatusCode, string(response.Body))
+	}
+}

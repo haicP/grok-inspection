@@ -22,20 +22,23 @@ func renderUIPage(pluginID string) []byte {
     .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     label.ctl, button { height:34px; border-radius:8px; font-size:13px; }
     label.ctl { display:inline-flex; align-items:center; gap:6px; padding:0 10px; border:1px solid #dbe1e8; background:#fff; color:#475569; }
-    input[type=number] { width:52px; height:26px; border:1px solid #cbd5e1; border-radius:6px; padding:0 6px; }
+    input[type=number] { width:56px; height:26px; border:1px solid #cbd5e1; border-radius:6px; padding:0 6px; }
     button { padding:0 12px; border:1px solid #d1d5db; background:#fff; color:#334155; cursor:pointer; }
     button.primary { border-color:#2563eb; background:#2563eb; color:#fff; font-weight:700; }
     button.soft { border-color:#c7d2fe; background:#eef2ff; color:#3730a3; font-weight:650; }
+    button.danger { border-color:#fecaca; background:#fef2f2; color:#b91c1c; font-weight:650; }
     button:disabled { opacity:.55; cursor:not-allowed; }
     .summary { display:grid; grid-template-columns:repeat(5,minmax(120px,1fr)); gap:10px; margin-bottom:12px; }
     .card { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:12px; box-shadow:0 1px 2px rgba(15,23,42,.04); cursor:pointer; }
     .card.active { outline:2px solid #2563eb; }
     .card .k { color:#64748b; font-size:12px; }
     .card .v { margin-top:4px; font-size:22px; font-weight:750; }
-    .bar { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:10px; align-items:center; }
+    .bar { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:8px; align-items:center; }
     .filters { display:flex; gap:6px; flex-wrap:wrap; }
     .filters button { height:28px; }
     .filters button.active { background:#2563eb; border-color:#2563eb; color:#fff; }
+    .export-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+    .export-row .hint { font-size:12px; color:#64748b; }
     .progress { min-height:20px; font-size:12px; color:#64748b; }
     .table-wrap { background:#fff; border:1px solid #e2e8f0; border-radius:10px; overflow:hidden; box-shadow:0 1px 2px rgba(15,23,42,.04); }
     table { width:100%%; border-collapse:collapse; min-width:980px; font-size:13px; }
@@ -63,6 +66,7 @@ func renderUIPage(pluginID string) []byte {
     .grok-inspection-page { min-width:0; color:var(--text) !important; }
     .grok-inspection-page .sub,
     .grok-inspection-page .progress,
+    .grok-inspection-page .export-row .hint,
     .grok-inspection-page .card .k { color:var(--muted) !important; }
     .grok-inspection-page .ctl,
     .grok-inspection-page button,
@@ -70,6 +74,7 @@ func renderUIPage(pluginID string) []byte {
     .grok-inspection-page .table-wrap { color:var(--text) !important; background:var(--surface) !important; border-color:var(--border) !important; }
     .grok-inspection-page button.primary { background:#2563eb !important; border-color:#2563eb !important; color:#fff !important; }
     .grok-inspection-page button.soft { background:#eef2ff !important; border-color:#c7d2fe !important; color:#3730a3 !important; }
+    .grok-inspection-page button.danger { background:#fef2f2 !important; border-color:#fecaca !important; color:#b91c1c !important; }
     .grok-inspection-page input[type=number],
     .grok-inspection-page .key-row input { color:var(--text) !important; background:var(--surface) !important; border-color:var(--input-border) !important; }
     .grok-inspection-page th { background:var(--surface-subtle) !important; color:var(--muted) !important; border-color:var(--border) !important; }
@@ -94,6 +99,7 @@ func renderUIPage(pluginID string) []byte {
         --input-border: #475569;
       }
       .grok-inspection-page button.soft { background:#242c58 !important; border-color:#4b5aa6 !important; color:#dbe4ff !important; }
+      .grok-inspection-page button.danger { background:#3f1d1d !important; border-color:#7f1d1d !important; color:#fecaca !important; }
       .grok-inspection-page .badge { background:#252b63 !important; color:#c7d2fe !important; }
       .grok-inspection-page .card.active { outline-color:#60a5fa !important; }
     }
@@ -112,13 +118,15 @@ func renderUIPage(pluginID string) []byte {
       .grok-inspection-page input[type=number] { flex:1; width:100%%; min-width:0; }
       .grok-inspection-page .controls > #stopBtn { grid-column:1; grid-row:4; width:100%%; min-width:0; padding:0 8px; white-space:nowrap; }
       .grok-inspection-page .controls > #runBtn { grid-column:2; grid-row:4; width:100%%; min-width:0; padding:0 8px; white-space:nowrap; }
-      .grok-inspection-page .controls > #applyBtn { grid-column:1 / -1; grid-row:5; width:100%%; min-width:0; padding:0 8px; white-space:nowrap; }
+      .grok-inspection-page .controls > #incrBtn { grid-column:1 / -1; grid-row:5; width:100%%; min-width:0; padding:0 8px; white-space:nowrap; }
+      .grok-inspection-page .controls > #applyBtn { grid-column:1 / -1; grid-row:6; width:100%%; min-width:0; padding:0 8px; white-space:nowrap; }
       .grok-inspection-page .summary { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
       .grok-inspection-page .card { min-width:0; padding:10px; }
       .grok-inspection-page .card .v { font-size:26px; }
       .grok-inspection-page .bar { display:block; }
       .grok-inspection-page .filters { margin-top:8px; overflow-x:auto; flex-wrap:nowrap; padding-bottom:4px; scrollbar-width:thin; }
       .grok-inspection-page .filters button { flex:0 0 auto; }
+      .grok-inspection-page .export-row { margin-top:8px; }
       .grok-inspection-page .pager { align-items:stretch; }
       .grok-inspection-page .pager > div { width:100%%; }
       .grok-inspection-page .pager > div:last-child { justify-content:space-between; }
@@ -131,17 +139,18 @@ func renderUIPage(pluginID string) []byte {
       <div>
         <div class="badge">xAI / Grok · CPA Plugin</div>
         <h1>Grok 账号巡检</h1>
-        <p class="sub">服务端后台巡检：可切换页面继续运行。permission_denied / 额度用尽建议禁用，健康已禁用建议启用。</p>
+        <p class="sub">完整巡检清空并重测；增量巡检只测 Auth 中相对上次结果的新增账号。结果落盘本地，批量操作按当前筛选。</p>
       </div>
       <div class="controls">
         <div class="key-row">
           <input id="managementKey" type="password" autocomplete="current-password" placeholder="CPA Management Key">
         </div>
-        <label class="ctl">并发 <input id="workers" type="number" min="1" max="16" value="6"></label>
+        <label class="ctl">并发 <input id="workers" type="number" min="1" max="16" step="1" value="6" title="1-16 的整数"></label>
         <label class="ctl"><input id="includeDisabled" type="checkbox"> 包含已禁用</label>
         <label class="ctl"><input id="onlyDisabled" type="checkbox"> 仅巡检已禁用</label>
         <button id="stopBtn" disabled>停止</button>
         <button id="applyBtn" class="soft" disabled>执行建议操作</button>
+        <button id="incrBtn" class="soft" disabled title="只检测 Auth 中相对上次结果新增的账号">增量巡检</button>
         <button id="runBtn" class="primary">开始巡检</button>
       </div>
     </div>
@@ -149,6 +158,13 @@ func renderUIPage(pluginID string) []byte {
     <div class="bar">
       <div id="filters" class="filters"></div>
       <div id="progress" class="progress">等待开始</div>
+    </div>
+    <div class="export-row">
+      <button id="exportJsonBtn" type="button">导出 JSON</button>
+      <button id="exportTxtBtn" type="button">导出 TXT</button>
+      <button id="batchDisableBtn" class="soft" type="button" disabled>批量禁用</button>
+      <button id="batchDeleteBtn" class="danger" type="button" disabled>批量删除</button>
+      <span class="hint" id="exportHint">按当前筛选：导出 / 批量禁用 / 批量删除</span>
     </div>
     <div class="table-wrap">
       <div style="overflow:auto">
@@ -168,6 +184,9 @@ func renderUIPage(pluginID string) []byte {
   </div>
   <script>
   const BASE = %q;
+  const WORKERS_MIN = 1;
+  const WORKERS_MAX = 16;
+  const WORKERS_DEFAULT = 6;
   const state = {
     filter: 'all',
     page: 1,
@@ -182,9 +201,41 @@ func renderUIPage(pluginID string) []byte {
   function savePrefs(patch) {
     localStorage.setItem(prefsKey, JSON.stringify(Object.assign(loadPrefs(), patch || {})));
   }
+  function clampWorkers(n) {
+    return Math.min(WORKERS_MAX, Math.max(WORKERS_MIN, n));
+  }
+  function parseWorkersStrict() {
+    const raw = String($('workers').value == null ? '' : $('workers').value).trim();
+    if (!/^\d+$/.test(raw)) {
+      throw new Error('并发必须是 ' + WORKERS_MIN + '-' + WORKERS_MAX + ' 的整数（当前默认 ' + WORKERS_DEFAULT + '）');
+    }
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < WORKERS_MIN || n > WORKERS_MAX) {
+      throw new Error('并发必须在 ' + WORKERS_MIN + '-' + WORKERS_MAX + ' 之间');
+    }
+    return n;
+  }
+  function normalizeWorkersInput(strict) {
+    try {
+      const n = parseWorkersStrict();
+      $('workers').value = String(n);
+      return n;
+    } catch (e) {
+      if (strict) throw e;
+      $('workers').value = String(WORKERS_DEFAULT);
+      return WORKERS_DEFAULT;
+    }
+  }
   const prefs = loadPrefs();
   state.pageSize = [20,50,100].includes(Number(prefs.pageSize)) ? Number(prefs.pageSize) : 20;
-  $('workers').value = String(Math.min(16, Math.max(1, Number(prefs.workers) || 6)));
+  {
+    const prefWorkers = Number(prefs.workers);
+    $('workers').value = String(
+      Number.isInteger(prefWorkers) && prefWorkers >= WORKERS_MIN && prefWorkers <= WORKERS_MAX
+        ? prefWorkers
+        : WORKERS_DEFAULT
+    );
+  }
   $('includeDisabled').checked = !!prefs.includeDisabled;
   $('onlyDisabled').checked = !!prefs.onlyDisabled;
   if ($('onlyDisabled').checked) $('includeDisabled').checked = false;
@@ -197,6 +248,57 @@ func renderUIPage(pluginID string) []byte {
     if (!ready) {
       $('stopBtn').disabled = true;
       $('applyBtn').disabled = true;
+      $('incrBtn').disabled = true;
+      $('batchDisableBtn').disabled = true;
+      $('batchDeleteBtn').disabled = true;
+    }
+  }
+  async function startInspection(incremental) {
+    try {
+      const workers = parseWorkersStrict();
+      $('workers').value = String(workers);
+      savePrefs({
+        workers,
+        includeDisabled: $('includeDisabled').checked,
+        onlyDisabled: $('onlyDisabled').checked
+      });
+      await api('/start', { method: 'POST', body: JSON.stringify({
+        workers,
+        include_disabled: $('includeDisabled').checked,
+        only_disabled: $('onlyDisabled').checked,
+        incremental: !!incremental
+      })});
+      await refresh();
+    } catch (e) { $('error').textContent = String(e.message || e); }
+  }
+  function filteredAuthIndexes() {
+    return filtered().map((r) => r.auth_index || r.file_name || r.name || r.email).filter(Boolean);
+  }
+  async function batchForce(action) {
+    const rows = filtered();
+    const indexes = filteredAuthIndexes();
+    if (!rows.length || !indexes.length) {
+      $('error').textContent = '当前筛选下没有可操作的账号';
+      return;
+    }
+    const label = action === 'delete' ? '删除' : '禁用';
+    const extra = action === 'delete'
+      ? '将同时删除 CPA Auth 凭证文件，并更新本地结果 JSON。'
+      : '将写入 CPA Auth 为禁用，并更新本地结果 JSON。';
+    if (!confirm('确认对当前筛选「' + filterLabel() + '」共 ' + indexes.length + ' 个账号执行批量' + label + '？\\n' + extra)) {
+      return;
+    }
+    try {
+      await api('/apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          force_action: action,
+          auth_indexes: indexes
+        })
+      });
+      await refresh();
+    } catch (e) {
+      $('error').textContent = String(e.message || e);
     }
   }
   keyInput.addEventListener('change', () => {
@@ -226,6 +328,7 @@ func renderUIPage(pluginID string) []byte {
     const text = await res.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch (_) { data = { raw: text }; }
+    // 202 Accepted is success for async apply/action
     if (!res.ok) throw new Error((data && (data.error || data.message)) || text || ('HTTP ' + res.status));
     return data;
   }
@@ -233,6 +336,58 @@ func renderUIPage(pluginID string) []byte {
     const rows = state.snapshot.results || [];
     if (state.filter === 'all') return rows;
     return rows.filter((r) => r.classification === state.filter);
+  }
+  function filterLabel() {
+    const map = { all:'全部', healthy:'健康', permission_denied:'权限被拒', quota_exhausted:'额度用尽', reauth:'需重登', probe_error:'异常' };
+    return map[state.filter] || state.filter;
+  }
+  function downloadBlob(filename, content, mime) {
+    const blob = new Blob([content], { type: mime || 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function exportRows(format) {
+    const rows = filtered();
+    if (!rows.length) {
+      $('error').textContent = '当前筛选下没有可导出的数据';
+      return;
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const tag = state.filter === 'all' ? 'all' : state.filter;
+    if (format === 'json') {
+      downloadBlob('grok-inspection-' + tag + '-' + stamp + '.json', JSON.stringify({
+        filter: state.filter,
+        filter_label: filterLabel(),
+        exported_at: new Date().toISOString(),
+        count: rows.length,
+        results: rows
+      }, null, 2), 'application/json;charset=utf-8');
+      return;
+    }
+    const lines = [];
+    lines.push('filter=' + filterLabel() + ' count=' + rows.length + ' exported_at=' + new Date().toISOString());
+    lines.push(['name','disabled','classification','http_status','model','action','reason','auth_index','file_name','email'].join('\t'));
+    rows.forEach((r) => {
+      lines.push([
+        r.name || '',
+        r.disabled ? '1' : '0',
+        r.classification || '',
+        r.http_status || '',
+        r.model || '',
+        r.action || '',
+        (r.reason || r.error_message || '').replace(/[\t\r\n]+/g, ' '),
+        r.auth_index || '',
+        r.file_name || '',
+        r.email || ''
+      ].join('\t'));
+    });
+    downloadBlob('grok-inspection-' + tag + '-' + stamp + '.txt', lines.join('\n'), 'text/plain;charset=utf-8');
   }
   function render() {
     const snap = state.snapshot || {};
@@ -257,6 +412,7 @@ func renderUIPage(pluginID string) []byte {
     $('filters').querySelectorAll('button').forEach((btn) => btn.onclick = () => { state.filter = btn.dataset.filter; state.page = 1; render(); });
 
     const rows = filtered();
+    $('exportHint').textContent = '当前筛选：' + filterLabel() + '（' + rows.length + ' 条）· 导出 / 批量禁用 / 批量删除均基于此';
     const totalPages = Math.max(1, Math.ceil(rows.length / state.pageSize));
     if (state.page > totalPages) state.page = totalPages;
     const start = (state.page - 1) * state.pageSize;
@@ -318,29 +474,69 @@ func renderUIPage(pluginID string) []byte {
     const prev = $('prev'); if (prev) prev.onclick = () => { if (state.page>1){ state.page--; render(); } };
     const next = $('next'); if (next) next.onclick = () => { if (state.page<totalPages){ state.page++; render(); } };
 
-    $('runBtn').disabled = !hasManagementKey() || !!(snap.running || snap.applying);
-    $('stopBtn').disabled = !hasManagementKey() || !snap.running;
     const actionCount = (snap.results || []).filter((r) => r.action === 'disable' || r.action === 'enable' || r.action === 'delete').length;
-    $('applyBtn').disabled = !hasManagementKey() || !!(snap.running || snap.applying || actionCount === 0);
+    const filteredCount = rows.length;
+    const busy = !!(snap.running || snap.applying);
+    const hasResults = (snap.results || []).length > 0;
+    $('runBtn').disabled = !hasManagementKey() || busy;
+    $('incrBtn').disabled = !hasManagementKey() || busy || !hasResults;
+    $('stopBtn').disabled = !hasManagementKey() || !snap.running;
+    $('applyBtn').disabled = !hasManagementKey() || busy || actionCount === 0;
+    $('batchDisableBtn').disabled = !hasManagementKey() || busy || filteredCount === 0;
+    $('batchDeleteBtn').disabled = !hasManagementKey() || busy || filteredCount === 0;
     $('applyBtn').textContent = snap.applying
       ? ('执行中 ' + (snap.apply_done||0) + '/' + (snap.apply_total||0))
       : (actionCount ? ('执行建议操作 (' + actionCount + ')') : '执行建议操作');
+    $('batchDisableBtn').textContent = filteredCount ? ('批量禁用 (' + filteredCount + ')') : '批量禁用';
+    $('batchDeleteBtn').textContent = filteredCount ? ('批量删除 (' + filteredCount + ')') : '批量删除';
     if (!hasManagementKey()) {
       $('progress').textContent = '请输入 CPA Management Key 后加载巡检状态';
     } else if (snap.applying) {
-      $('progress').textContent = '执行建议 ' + (snap.apply_done||0) + '/' + (snap.apply_total||0) + (snap.apply_current ? '：' + snap.apply_current : '');
+      let msg = '后台执行操作 ' + (snap.apply_done||0) + '/' + (snap.apply_total||0) + (snap.apply_current ? '：' + snap.apply_current : '');
+      if ((snap.apply_failures || []).length) msg += '；失败 ' + snap.apply_failures.length;
+      $('progress').textContent = msg;
     } else if (snap.running) {
-      $('progress').textContent = '巡检中 ' + (snap.done||0) + '/' + (snap.total||0) + '（服务端后台继续）';
+      const mode = snap.incremental ? '增量巡检中' : '巡检中';
+      const extra = snap.incremental ? '（仅新增，保留已有结果）' : '（后台继续）';
+      $('progress').textContent = mode + ' ' + (snap.done||0) + '/' + (snap.total||0) + ' · 并发 ' + (snap.workers||WORKERS_DEFAULT) + extra;
     } else if (snap.stopped) {
-      $('progress').textContent = '已停止，完成 ' + (snap.done||0) + (snap.total ? '/' + snap.total : '') + ' 个账号';
+      const mode = snap.incremental ? '增量已停止' : '已停止';
+      $('progress').textContent = mode + '，本轮 ' + (snap.done||0) + (snap.total ? '/' + snap.total : '') + '，列表共 ' + ((snap.results||[]).length) + ' 个账号';
     } else if ((snap.results||[]).length) {
-      $('progress').textContent = '巡检完成，共 ' + (snap.results||[]).length + ' 个账号';
+      let msg = '巡检完成，共 ' + (snap.results||[]).length + ' 个账号';
+      if (snap.incremental && (snap.done||0) >= 0 && snap.total != null) {
+        msg = '增量完成：本轮新增检测 ' + (snap.done||0) + ' 个，列表共 ' + (snap.results||[]).length + ' 个';
+      }
+      if (snap.store_path) msg += ' · 已落盘';
+      if ((snap.apply_failures || []).length) msg += ' · 上次操作失败 ' + snap.apply_failures.length + ' 条';
+      $('progress').textContent = msg;
     } else {
       $('progress').textContent = '等待开始';
     }
+    if ((snap.apply_failures || []).length && !snap.applying) {
+      $('error').textContent = (snap.apply_failures || []).join('\n');
+    }
+  }
+  let pollTimer = null;
+  const POLL_MS = 1500;
+  function stopPolling() {
+    if (pollTimer != null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+  function startPolling() {
+    if (pollTimer != null) return;
+    pollTimer = setInterval(() => { refresh(); }, POLL_MS);
+  }
+  // Only poll while a server job is active; idle pages do not keep hitting /status.
+  function syncPolling(snap) {
+    if (snap && (snap.running || snap.applying)) startPolling();
+    else stopPolling();
   }
   async function refresh() {
     if (!keyInput.value.trim()) {
+      stopPolling();
       state.snapshot = { results: [], summary: {}, running: false, applying: false, done: 0, total: 0 };
       $('error').textContent = '';
       updateAuthState();
@@ -353,25 +549,32 @@ func renderUIPage(pluginID string) []byte {
       if (data.running) {
         $('includeDisabled').checked = !!data.include_disabled;
         $('onlyDisabled').checked = !!data.only_disabled;
-        if (data.workers) $('workers').value = data.workers;
+        if (data.workers) $('workers').value = String(clampWorkers(Number(data.workers) || WORKERS_DEFAULT));
       }
-      $('error').textContent = '';
+      if (!(data.apply_failures || []).length) {
+        $('error').textContent = '';
+      }
+      syncPolling(data);
       render();
     } catch (e) {
       $('error').textContent = String(e.message || e);
+      // Keep polling only if we still believe a job is active.
+      syncPolling(state.snapshot);
     }
   }
   function wireExclusive() {
     const include = $('includeDisabled');
     const only = $('onlyDisabled');
-    const persistWorkers = () => {
-      const workers = Math.min(16, Math.max(1, Number($('workers').value) || 6));
-      savePrefs({ workers });
-    };
-    $('workers').addEventListener('input', persistWorkers);
     $('workers').addEventListener('change', () => {
-      persistWorkers();
-      $('workers').value = String(Math.min(16, Math.max(1, Number($('workers').value) || 6)));
+      try {
+        const n = normalizeWorkersInput(true);
+        savePrefs({ workers: n });
+        $('error').textContent = '';
+      } catch (e) {
+        $('error').textContent = String(e.message || e);
+        $('workers').value = String(WORKERS_DEFAULT);
+        savePrefs({ workers: WORKERS_DEFAULT });
+      }
     });
     include.onchange = () => {
       if (include.checked) only.checked = false;
@@ -382,45 +585,35 @@ func renderUIPage(pluginID string) []byte {
       savePrefs({ includeDisabled: include.checked, onlyDisabled: only.checked });
     };
   }
-  $('runBtn').onclick = async () => {
-    try {
-      const workers = Math.min(16, Math.max(1, Number($('workers').value) || 6));
-      savePrefs({
-        workers,
-        includeDisabled: $('includeDisabled').checked,
-        onlyDisabled: $('onlyDisabled').checked
-      });
-      await api('/start', { method: 'POST', body: JSON.stringify({
-        workers,
-        include_disabled: $('includeDisabled').checked,
-        only_disabled: $('onlyDisabled').checked
-      })});
-      await refresh();
-    } catch (e) { $('error').textContent = String(e.message || e); }
-  };
+  $('runBtn').onclick = () => startInspection(false);
+  $('incrBtn').onclick = () => startInspection(true);
   $('stopBtn').onclick = async () => {
     try { await api('/stop', { method: 'POST', body: '{}' }); await refresh(); }
     catch (e) { $('error').textContent = String(e.message || e); }
   };
   $('applyBtn').onclick = async () => {
-    if (!confirm('确认执行当前建议的禁用/启用/删除操作？')) return;
+    if (!confirm('确认异步执行当前建议的禁用/启用/删除操作？')) return;
     try {
       const result = await api('/apply', { method: 'POST', body: '{}' });
-      const success = Number(result && result.success || 0);
-      const failed = Number(result && result.failed || 0);
+      const total = Number(result && result.apply_total || 0);
+      const failed = Array.isArray(result && result.apply_failures) ? result.apply_failures.length : 0;
       if (failed > 0) {
-        const details = Array.isArray(result.failures) ? result.failures.slice(0, 5).join('；') : '';
-        $('error').textContent = '建议操作完成：成功 ' + success + '，失败 ' + failed + (details ? ('。示例：' + details) : '');
+        const details = result.apply_failures.slice(0, 5).join('；');
+        $('error').textContent = '建议操作已启动：失败 ' + failed + (details ? ('。示例：' + details) : '');
       } else {
-        $('error').textContent = success ? ('建议操作完成：成功 ' + success + ' 项') : '';
+        $('error').textContent = total ? ('建议操作已在后台执行：共 ' + total + ' 项') : '';
       }
       await refresh();
     }
     catch (e) { $('error').textContent = String(e.message || e); }
   };
+  $('batchDisableBtn').onclick = () => batchForce('disable');
+  $('batchDeleteBtn').onclick = () => batchForce('delete');
+  $('exportJsonBtn').onclick = () => exportRows('json');
+  $('exportTxtBtn').onclick = () => exportRows('txt');
   wireExclusive();
+  // One-shot load on open; polling starts only when status reports running/applying.
   refresh();
-  setInterval(refresh, 1500);
   </script>
 </body>
 </html>`, base)

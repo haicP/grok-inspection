@@ -153,7 +153,11 @@ func TestResourcePageHasExportAndBatchOps(t *testing.T) {
 		`snap.running || snap.applying`,
 		`id="incrBtn"`,
 		`增量巡检`,
-		`incremental: !!incremental`,
+		`id="filterRunBtn"`,
+		`巡检当前分类`,
+		`classificationsForFilter`,
+		`mode === 'filter'`,
+		`body.incremental = true`,
 		`['other','异常'`,
 	}
 	for _, marker := range required {

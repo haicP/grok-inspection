@@ -159,7 +159,7 @@ func renderUIPage(pluginID string) []byte {
       <div>
         <div class="badge">xAI / Grok · CPA Plugin</div>
         <h1>Grok 账号巡检</h1>
-        <p class="sub">完整巡检清空并重测；增量巡检只测 Auth 中相对上次结果的新增账号。结果落盘本地，批量操作按当前筛选。</p>
+        <p class="sub">完整巡检清空并重测；增量巡检只测新增账号；点上方分类卡片后可「巡检当前分类」只重测该分类。结果落盘，批量操作按当前筛选。</p>
       </div>
       <div class="controls">
         <div class="key-row" id="keyRow">
@@ -172,6 +172,7 @@ func renderUIPage(pluginID string) []byte {
         <button id="stopBtn" disabled>停止</button>
         <button id="applyBtn" class="soft" disabled>执行建议操作</button>
         <button id="incrBtn" class="soft" disabled title="只检测 Auth 中相对上次结果新增的账号">增量巡检</button>
+        <button id="filterRunBtn" class="soft" disabled title="只重新探测当前卡片筛选分类下的账号，保留其他结果">巡检当前分类</button>
         <button id="runBtn" class="primary">开始巡检</button>
       </div>
     </div>
@@ -466,7 +467,12 @@ func renderUIPage(pluginID string) []byte {
       $('confirmOk').focus();
     });
   }
-  async function startInspection(incremental) {
+  function classificationsForFilter(filter) {
+    if (!filter || filter === 'all') return [];
+    // Server expands "other" to non-primary classes.
+    return [filter];
+  }
+  async function startInspection(mode) {
     try {
       const workers = parseWorkersStrict();
       $('workers').value = String(workers);
@@ -475,12 +481,29 @@ func renderUIPage(pluginID string) []byte {
         includeDisabled: $('includeDisabled').checked,
         onlyDisabled: $('onlyDisabled').checked
       });
-      await api('/start', { method: 'POST', body: JSON.stringify({
+      const body = {
         workers,
         include_disabled: $('includeDisabled').checked,
         only_disabled: $('onlyDisabled').checked,
-        incremental: !!incremental
-      })});
+        incremental: false,
+        classifications: []
+      };
+      if (mode === true) {
+        body.incremental = true;
+      } else if (mode === 'filter') {
+        const classes = classificationsForFilter(state.filter);
+        if (!classes.length) {
+          showErr('请先点击上方卡片选择一个分类，再巡检当前分类');
+          return;
+        }
+        const count = filtered().length;
+        if (!count) {
+          showErr('当前分类「' + filterLabel() + '」下没有可巡检账号');
+          return;
+        }
+        body.classifications = classes;
+      }
+      await api('/start', { method: 'POST', body: JSON.stringify(body)});
       await refresh();
     } catch (e) { showErr(String(e.message || e)); }
   }
@@ -855,8 +878,13 @@ func renderUIPage(pluginID string) []byte {
     const enableCount = rows.filter((r) => !!r.disabled).length;  // 当前分类下已禁用 → 可启用
     const busy = !!(snap.running || snap.applying);
     const hasResults = (snap.results || []).length > 0;
+    const filterCount = state.filter === 'all' ? 0 : filteredCount;
     $('runBtn').disabled = !hasManagementKey() || busy;
     $('incrBtn').disabled = !hasManagementKey() || busy || !hasResults;
+    if ($('filterRunBtn')) {
+      $('filterRunBtn').disabled = !hasManagementKey() || busy || state.filter === 'all' || filterCount === 0;
+      $('filterRunBtn').textContent = filterCount ? ('巡检当前分类 (' + filterCount + ')') : '巡检当前分类';
+    }
     $('stopBtn').disabled = !hasManagementKey() || !snap.running;
     $('applyBtn').disabled = !hasManagementKey() || busy || actionCount === 0;
     $('batchExportBtn').disabled = filteredCount === 0;
@@ -877,15 +905,20 @@ func renderUIPage(pluginID string) []byte {
       if ((snap.apply_failures || []).length) msg += '；失败 ' + snap.apply_failures.length;
       setProgress(msg, true);
     } else if (snap.running) {
-      const mode = snap.incremental ? '增量巡检中' : '巡检中';
-      const extra = snap.incremental ? '（仅新增，保留已有结果）' : '（后台继续）';
+      const scoped = Array.isArray(snap.classifications) && snap.classifications.length > 0;
+      const mode = scoped ? '分类巡检中' : (snap.incremental ? '增量巡检中' : '巡检中');
+      const extra = scoped ? '（仅当前分类，保留其他结果）' : (snap.incremental ? '（仅新增，保留已有结果）' : '（后台继续）');
       setProgress(mode + ' ' + (snap.done||0) + '/' + (snap.total||0) + ' · 并发 ' + (snap.workers||WORKERS_DEFAULT) + extra, true);
     } else if (snap.stopped) {
-      const mode = snap.incremental ? '增量已停止' : '已停止';
+      const scoped = Array.isArray(snap.classifications) && snap.classifications.length > 0;
+      const mode = scoped ? '分类已停止' : (snap.incremental ? '增量已停止' : '已停止');
       setProgress(mode + '，本轮 ' + (snap.done||0) + (snap.total ? '/' + snap.total : '') + '，列表共 ' + ((snap.results||[]).length) + ' 个账号', false);
     } else if ((snap.results||[]).length) {
+      const scoped = Array.isArray(snap.classifications) && snap.classifications.length > 0;
       let msg = '巡检完成，共 ' + (snap.results||[]).length + ' 个账号';
-      if (snap.incremental && (snap.done||0) >= 0 && snap.total != null) {
+      if (scoped && (snap.done||0) >= 0 && snap.total != null) {
+        msg = '分类完成：本轮检测 ' + (snap.done||0) + ' 个，列表共 ' + (snap.results||[]).length + ' 个';
+      } else if (snap.incremental && (snap.done||0) >= 0 && snap.total != null) {
         msg = '增量完成：本轮新增检测 ' + (snap.done||0) + ' 个，列表共 ' + (snap.results||[]).length + ' 个';
       }
       if (snap.store_path) msg += ' · 已落盘';
@@ -1006,6 +1039,7 @@ func renderUIPage(pluginID string) []byte {
   }
   $('runBtn').onclick = () => startInspection(false);
   $('incrBtn').onclick = () => startInspection(true);
+  if ($('filterRunBtn')) $('filterRunBtn').onclick = () => startInspection('filter');
   $('stopBtn').onclick = async () => {
     try { await api('/stop', { method: 'POST', body: '{}' }); await refresh(); }
     catch (e) { showErr(String(e.message || e)); }

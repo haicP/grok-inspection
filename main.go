@@ -12,7 +12,7 @@ import (
 
 const (
 	pluginName            = "grok-inspection"
-	pluginVersion         = "0.1.6"
+	pluginVersion         = "0.1.7"
 	resourceContentType   = "text/html; charset=utf-8"
 	jsonContentType       = "application/json; charset=utf-8"
 	managementRoutePrefix = "/plugins/" + pluginName
@@ -59,7 +59,7 @@ func managementRegistration() pluginapi.ManagementRegistrationResponse {
 	return pluginapi.ManagementRegistrationResponse{
 		Routes: []pluginapi.ManagementRoute{
 			{Method: http.MethodGet, Path: managementRoutePrefix + "/status", Description: "Get Grok inspection status."},
-			{Method: http.MethodPost, Path: managementRoutePrefix + "/start", Description: "Start a full or incremental Grok inspection job."},
+			{Method: http.MethodPost, Path: managementRoutePrefix + "/start", Description: "Start a full, incremental, or classify-scoped Grok inspection job."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/stop", Description: "Stop the current Grok inspection job."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/apply", Description: "Apply recommended disable/enable/delete actions asynchronously."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/action", Description: "Disable, enable, or delete one Grok credential asynchronously."},
@@ -105,7 +105,7 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		if err := engine.start(body); err != nil {
 			status := http.StatusConflict
 			msg := err.Error()
-			if strings.Contains(msg, "workers must") || strings.Contains(msg, "增量巡检") || strings.Contains(msg, "busy") {
+			if strings.Contains(msg, "workers must") || strings.Contains(msg, "增量巡检") || strings.Contains(msg, "分类巡检") || strings.Contains(msg, "当前分类") || strings.Contains(msg, "busy") {
 				status = http.StatusBadRequest
 				if strings.Contains(msg, "busy") || strings.Contains(msg, "already running") {
 					status = http.StatusConflict

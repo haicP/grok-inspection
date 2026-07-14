@@ -63,6 +63,8 @@ type jobSnapshot struct {
 	Stopped         bool            `json:"stopped"`
 	Applying        bool            `json:"applying"`
 	Incremental     bool            `json:"incremental"`
+	// Classifications is set when this run re-probes only matching last classifications.
+	Classifications []string        `json:"classifications,omitempty"`
 	Done            int             `json:"done"`
 	Total           int             `json:"total"`
 	Workers         int             `json:"workers"`
@@ -92,6 +94,11 @@ type startRequest struct {
 	OnlyDisabled    bool `json:"only_disabled"`
 	// Incremental only probes Auth accounts not already present in the last results.
 	Incremental bool `json:"incremental"`
+	// Classifications re-probes only accounts whose last classification matches.
+	// Keeps other results. Special token "other" matches non-primary classes
+	// (not healthy / permission_denied / quota_exhausted / reauth).
+	// Mutually exclusive with Incremental.
+	Classifications []string `json:"classifications"`
 }
 
 type applyRequest struct {
@@ -125,6 +132,7 @@ type inspectionEngine struct {
 	actionSeq       uint64
 	recentRowActions []rowActionReport // ring of latest completed single-row ops
 	incremental     bool
+	classifications []string // current/last scoped re-inspect classes
 	runID           uint64
 	workers         int
 	includeDisabled bool
@@ -257,6 +265,7 @@ func (e *inspectionEngine) snapshotLocked(includeResults bool) jobSnapshot {
 		Stopped:          e.stopped && !e.running,
 		Applying:         e.applying,
 		Incremental:      e.incremental,
+		Classifications:  append([]string(nil), e.classifications...),
 		Done:             e.probeDone,
 		Total:            e.total,
 		Workers:          e.workers,
@@ -306,6 +315,11 @@ func (e *inspectionEngine) start(req startRequest) error {
 	if errWorkers != nil {
 		return errWorkers
 	}
+	classifications := normalizeClassifications(req.Classifications)
+	classifyScoped := len(classifications) > 0
+	if classifyScoped && req.Incremental {
+		return fmt.Errorf("分类巡检不能与增量巡检同时使用")
+	}
 
 	e.mu.Lock()
 	if e.running || e.applying {
@@ -320,6 +334,23 @@ func (e *inspectionEngine) start(req startRequest) error {
 		e.mu.Unlock()
 		return fmt.Errorf("增量巡检需要已有结果，请先完整巡检")
 	}
+	if classifyScoped && len(e.results) == 0 {
+		e.mu.Unlock()
+		return fmt.Errorf("分类巡检需要已有结果，请先完整巡检")
+	}
+	if classifyScoped {
+		matched := 0
+		classSet := stringSet(classifications)
+		for _, item := range e.results {
+			if classificationMatches(item.Classification, classSet) {
+				matched++
+			}
+		}
+		if matched == 0 {
+			e.mu.Unlock()
+			return fmt.Errorf("当前分类下没有可巡检账号")
+		}
+	}
 	includeDisabled := req.IncludeDisabled
 	onlyDisabled := req.OnlyDisabled
 	if onlyDisabled {
@@ -328,11 +359,13 @@ func (e *inspectionEngine) start(req startRequest) error {
 	e.running = true
 	e.stopped = false
 	e.applying = false
-	e.incremental = req.Incremental
+	e.incremental = req.Incremental && !classifyScoped
+	e.classifications = classifications
 	e.workers = workers
 	e.includeDisabled = includeDisabled
 	e.onlyDisabled = onlyDisabled
-	if !req.Incremental {
+	// Full inspect clears; incremental and classify-scoped keep existing rows.
+	if !req.Incremental && !classifyScoped {
 		e.results = nil
 		e.bumpResultsLocked()
 	}
@@ -346,14 +379,14 @@ func (e *inspectionEngine) start(req startRequest) error {
 	e.finishedAt = time.Time{}
 	e.runID++
 	runID := e.runID
-	incremental := req.Incremental
+	incremental := e.incremental
 	e.persistLocked()
 	e.mu.Unlock()
 
 	e.runWG.Add(1)
 	go func() {
 		defer e.runWG.Done()
-		e.run(runID, workers, includeDisabled, onlyDisabled, incremental)
+		e.run(runID, workers, includeDisabled, onlyDisabled, incremental, classifications)
 	}()
 	return nil
 }
@@ -388,6 +421,26 @@ func (e *inspectionEngine) appendResult(runID uint64, result accountResult) {
 	e.probeDone++
 	e.bumpResultsLocked()
 	// Periodic flush so a crash mid-run still keeps partial progress.
+	if e.probeDone%10 == 0 {
+		e.persistLocked()
+	}
+}
+
+// upsertResult replaces an existing row by stable identity, or appends if new.
+// Used by classify-scoped re-inspect so other categories stay intact.
+func (e *inspectionEngine) upsertResult(runID uint64, result accountResult) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.runID != runID || e.stopped {
+		return
+	}
+	if idx := findResultIndex(e.results, result); idx >= 0 {
+		e.results[idx] = result
+	} else {
+		e.results = append(e.results, result)
+	}
+	e.probeDone++
+	e.bumpResultsLocked()
 	if e.probeDone%10 == 0 {
 		e.persistLocked()
 	}
@@ -465,12 +518,16 @@ func filterNewAuthEntries(files []pluginapi.HostAuthFileEntry, known map[string]
 	return targets
 }
 
-func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyDisabled, incremental bool) {
+func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyDisabled, incremental bool, classifications []string) {
 	defer e.finish(runID)
 
 	list, errList := callHostAuthList()
 	if errList != nil {
-		e.appendResult(runID, accountResult{
+		write := e.appendResult
+		if len(classifications) > 0 {
+			write = e.upsertResult
+		}
+		write(runID, accountResult{
 			Name:           "system",
 			Classification: "probe_error",
 			Action:         "keep",
@@ -478,6 +535,9 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 		})
 		return
 	}
+
+	classSet := stringSet(classifications)
+	classifyScoped := len(classSet) > 0
 
 	var known map[string]struct{}
 	if incremental {
@@ -487,7 +547,18 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 	}
 
 	var targets []pluginapi.HostAuthFileEntry
-	if incremental {
+	var missing []accountResult
+	if classifyScoped {
+		e.mu.Lock()
+		selected := make([]accountResult, 0)
+		for _, item := range e.results {
+			if classificationMatches(item.Classification, classSet) {
+				selected = append(selected, item)
+			}
+		}
+		e.mu.Unlock()
+		targets, missing = resolveClassifyTargets(list.Files, selected)
+	} else if incremental {
 		targets = filterNewAuthEntries(list.Files, known, includeDisabled, onlyDisabled)
 	} else {
 		targets = make([]pluginapi.HostAuthFileEntry, 0)
@@ -503,9 +574,32 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 
 	e.mu.Lock()
 	if e.runID == runID {
-		e.total = len(targets)
+		if classifyScoped {
+			e.total = len(targets) + len(missing)
+		} else {
+			e.total = len(targets)
+		}
 	}
 	e.mu.Unlock()
+
+	writeResult := e.appendResult
+	if classifyScoped {
+		writeResult = e.upsertResult
+	}
+
+	for _, item := range missing {
+		if e.isStopped(runID) {
+			return
+		}
+		missed := item
+		missed.Classification = "probe_error"
+		missed.Action = "keep"
+		missed.Reason = "Auth 列表中已不存在该账号"
+		missed.HTTPStatus = 0
+		missed.ErrorCode = ""
+		missed.ErrorMessage = ""
+		writeResult(runID, missed)
+	}
 
 	if len(targets) == 0 {
 		return
@@ -527,7 +621,7 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 				return
 			}
 			result := inspectAccount(file)
-			e.appendResult(runID, result)
+			writeResult(runID, result)
 		}()
 	}
 	wg.Wait()
@@ -1122,6 +1216,110 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 	engine.mu.Unlock()
 	_ = status
 	return failures
+}
+
+func normalizeClassifications(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// classificationMatches reports whether a result class is in the requested set.
+// Token "other" matches any class outside the four primary buckets.
+func classificationMatches(class string, want map[string]struct{}) bool {
+	if len(want) == 0 {
+		return false
+	}
+	class = strings.TrimSpace(class)
+	if _, ok := want[class]; ok {
+		return true
+	}
+	if _, ok := want["other"]; !ok {
+		return false
+	}
+	switch class {
+	case "healthy", "permission_denied", "quota_exhausted", "reauth":
+		return false
+	default:
+		return true
+	}
+}
+
+func resultIdentityMatch(a, b accountResult) bool {
+	if ai := strings.TrimSpace(a.AuthIndex); ai != "" && ai == strings.TrimSpace(b.AuthIndex) {
+		return true
+	}
+	if fn := strings.ToLower(strings.TrimSpace(a.FileName)); fn != "" && fn == strings.ToLower(strings.TrimSpace(b.FileName)) {
+		return true
+	}
+	return false
+}
+
+func findResultIndex(results []accountResult, want accountResult) int {
+	for i, item := range results {
+		if resultIdentityMatch(item, want) {
+			return i
+		}
+	}
+	return -1
+}
+
+func matchAuthFile(files []pluginapi.HostAuthFileEntry, want accountResult) (pluginapi.HostAuthFileEntry, bool) {
+	if ai := strings.TrimSpace(want.AuthIndex); ai != "" {
+		for _, file := range files {
+			if strings.TrimSpace(file.AuthIndex) == ai {
+				return file, true
+			}
+		}
+	}
+	if fn := strings.ToLower(strings.TrimSpace(want.FileName)); fn != "" {
+		for _, file := range files {
+			if strings.ToLower(strings.TrimSpace(file.Name)) == fn {
+				return file, true
+			}
+		}
+	}
+	return pluginapi.HostAuthFileEntry{}, false
+}
+
+// resolveClassifyTargets maps prior results to current Auth entries.
+// Missing entries are returned separately so the UI can mark them.
+func resolveClassifyTargets(files []pluginapi.HostAuthFileEntry, selected []accountResult) (targets []pluginapi.HostAuthFileEntry, missing []accountResult) {
+	seen := make(map[string]struct{}, len(selected))
+	for _, item := range selected {
+		file, ok := matchAuthFile(files, item)
+		if !ok {
+			missing = append(missing, item)
+			continue
+		}
+		key := strings.TrimSpace(file.AuthIndex)
+		if key == "" {
+			key = "name:" + strings.ToLower(strings.TrimSpace(file.Name))
+		} else {
+			key = "ai:" + key
+		}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		targets = append(targets, file)
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		return strings.ToLower(targets[i].Name) < strings.ToLower(targets[j].Name)
+	})
+	return targets, missing
 }
 
 func stringSet(values []string) map[string]struct{} {

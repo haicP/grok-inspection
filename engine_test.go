@@ -288,3 +288,125 @@ func TestApplyIsAsyncAndStatusStaysResponsive(t *testing.T) {
 	}
 	engine.runWG.Wait()
 }
+
+
+func TestClassifyScopedStartRequiresExistingResults(t *testing.T) {
+	e := &inspectionEngine{workers: defaultWorkers}
+	err := e.start(startRequest{Workers: 2, Classifications: []string{"quota_exhausted"}})
+	if err == nil || !strings.Contains(err.Error(), "分类巡检") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestClassifyScopedRejectsWithIncremental(t *testing.T) {
+	e := &inspectionEngine{
+		workers: defaultWorkers,
+		results: []accountResult{{AuthIndex: "a1", Classification: "quota_exhausted"}},
+	}
+	err := e.start(startRequest{Workers: 2, Incremental: true, Classifications: []string{"quota_exhausted"}})
+	if err == nil || !strings.Contains(err.Error(), "分类巡检") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestClassifyScopedRejectsEmptyMatch(t *testing.T) {
+	e := &inspectionEngine{
+		workers: defaultWorkers,
+		results: []accountResult{{AuthIndex: "a1", Classification: "healthy"}},
+	}
+	err := e.start(startRequest{Workers: 2, Classifications: []string{"reauth"}})
+	if err == nil || !strings.Contains(err.Error(), "当前分类") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestClassificationMatchesOther(t *testing.T) {
+	want := stringSet([]string{"other"})
+	if !classificationMatches("probe_error", want) {
+		t.Fatal("probe_error should match other")
+	}
+	if !classificationMatches("model_unavailable", want) {
+		t.Fatal("model_unavailable should match other")
+	}
+	if classificationMatches("healthy", want) {
+		t.Fatal("healthy should not match other")
+	}
+	if classificationMatches("quota_exhausted", want) {
+		t.Fatal("quota_exhausted should not match other")
+	}
+	wantQuota := stringSet([]string{"quota_exhausted"})
+	if !classificationMatches("quota_exhausted", wantQuota) {
+		t.Fatal("exact class should match")
+	}
+	if classificationMatches("reauth", wantQuota) {
+		t.Fatal("other class should not match exact set")
+	}
+}
+
+func TestNormalizeClassifications(t *testing.T) {
+	got := normalizeClassifications([]string{" reauth ", "quota_exhausted", "reauth", ""})
+	if len(got) != 2 || got[0] != "quota_exhausted" || got[1] != "reauth" {
+		t.Fatalf("got=%v", got)
+	}
+}
+
+func TestFindResultIndexAndResolveTargets(t *testing.T) {
+	results := []accountResult{
+		{AuthIndex: "a1", FileName: "a.json", Classification: "quota_exhausted"},
+		{AuthIndex: "a2", FileName: "b.json", Classification: "healthy"},
+	}
+	if idx := findResultIndex(results, accountResult{AuthIndex: "a1"}); idx != 0 {
+		t.Fatalf("idx=%d", idx)
+	}
+	if idx := findResultIndex(results, accountResult{FileName: "b.json"}); idx != 1 {
+		t.Fatalf("idx=%d", idx)
+	}
+	if idx := findResultIndex(results, accountResult{AuthIndex: "missing"}); idx != -1 {
+		t.Fatalf("idx=%d", idx)
+	}
+
+	files := []pluginapi.HostAuthFileEntry{
+		{AuthIndex: "a1", Name: "a.json", Provider: "xai"},
+	}
+	selected := []accountResult{
+		{AuthIndex: "a1", FileName: "a.json", Classification: "quota_exhausted"},
+		{AuthIndex: "gone", FileName: "gone.json", Classification: "quota_exhausted"},
+	}
+	targets, missing := resolveClassifyTargets(files, selected)
+	if len(targets) != 1 || targets[0].AuthIndex != "a1" {
+		t.Fatalf("targets=%+v", targets)
+	}
+	if len(missing) != 1 || missing[0].AuthIndex != "gone" {
+		t.Fatalf("missing=%+v", missing)
+	}
+}
+
+func TestUpsertResultReplacesByAuthIndex(t *testing.T) {
+	e := &inspectionEngine{
+		workers: defaultWorkers,
+		runID:   7,
+		results: []accountResult{
+			{AuthIndex: "a1", FileName: "a.json", Classification: "quota_exhausted", Action: "disable"},
+			{AuthIndex: "a2", FileName: "b.json", Classification: "healthy", Action: "keep"},
+		},
+	}
+	e.upsertResult(7, accountResult{
+		AuthIndex:      "a1",
+		FileName:       "a.json",
+		Classification: "healthy",
+		Action:         "keep",
+		Reason:         "ok",
+	})
+	if len(e.results) != 2 {
+		t.Fatalf("len=%d", len(e.results))
+	}
+	if e.results[0].Classification != "healthy" || e.results[0].Action != "keep" {
+		t.Fatalf("row0=%+v", e.results[0])
+	}
+	if e.results[1].Classification != "healthy" {
+		t.Fatalf("row1 should stay healthy: %+v", e.results[1])
+	}
+	if e.probeDone != 1 {
+		t.Fatalf("probeDone=%d", e.probeDone)
+	}
+}

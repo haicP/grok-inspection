@@ -141,3 +141,35 @@ func TestResolveProbeOutcomeUsesFallbackWhenPrimaryBare429(t *testing.T) {
 	}
 }
 
+func TestClassifyGenericQuotaTextIsNotQuotaExhausted(t *testing.T) {
+	got := classifyProbe(classifyInput{
+		ChatStatus: http.StatusTooManyRequests,
+		ChatCode:   "rate_limit",
+		ChatError:  "usage_limit_reached / quota exhausted",
+	})
+	if got.Classification == "quota_exhausted" {
+		t.Fatalf("generic rate-limit text must not be quota_exhausted: %+v", got)
+	}
+	if got.Classification != "probe_error" || got.Action != "keep" {
+		t.Fatalf("want probe_error/keep, got %+v", got)
+	}
+}
+
+func TestIsFreeUsageExhaustedOnly(t *testing.T) {
+	if !isFreeUsageExhausted("free-usage-exhausted", "") {
+		t.Fatal("code free-usage-exhausted")
+	}
+	if !isFreeUsageExhausted("subscription:free-usage-exhausted", "no") {
+		t.Fatal("subscription free-usage-exhausted")
+	}
+	if !isFreeUsageExhausted("", "Included free usage has been exhausted") {
+		t.Fatal("official message")
+	}
+	if isFreeUsageExhausted("rate_limit", "too many requests") {
+		t.Fatal("generic rate limit must not match")
+	}
+	if isFreeUsageExhausted("", "quota exhausted") {
+		t.Fatal("bare quota exhausted must not match")
+	}
+}
+

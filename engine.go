@@ -671,14 +671,7 @@ func inspectAccount(file pluginapi.HostAuthFileEntry) accountResult {
 	// One short retry on bare 429: concurrent inspection often trips temporary throttling.
 	if chatResp.StatusCode == http.StatusTooManyRequests {
 		parsed := extractError(chatResp.Body)
-		blob := lower(parsed.Code) + " " + lower(parsed.Message)
-		if !containsAny(blob,
-			"free-usage-exhausted",
-			"included free usage",
-			"usage_limit_reached",
-			"quota exhausted",
-			"subscription:free-usage",
-		) {
+		if !isFreeUsageExhausted(parsed.Code, parsed.Message) {
 			time.Sleep(350 * time.Millisecond)
 			if retryResp, errRetry := callHostAPICall(file.AuthIndex, http.MethodPost, "https://cli-chat-proxy.grok.com/v1/responses", []byte(chatBody), true); errRetry == nil {
 				chatResp = retryResp

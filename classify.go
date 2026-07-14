@@ -44,6 +44,17 @@ func containsAny(text string, needles ...string) bool {
 	return false
 }
 
+// isFreeUsageExhausted reports true only for Grok free-tier exhaustion signals.
+// Bare HTTP 429 / generic rate-limit text must not match.
+func isFreeUsageExhausted(code, message string) bool {
+	blob := lower(code) + " " + lower(message)
+	return containsAny(blob,
+		"free-usage-exhausted",
+		"subscription:free-usage-exhausted",
+		"included free usage has been exhausted",
+	)
+}
+
 func isXAIEntry(provider, name, entryType string) bool {
 	provider = lower(provider)
 	entryType = lower(entryType)
@@ -121,14 +132,8 @@ func classifyProbe(input classifyInput) classifyResult {
 	) {
 		return classifyResult{Classification: "reauth", Action: "delete", Reason: "认证已过期或失效"}
 	}
-	// Real free-usage exhaustion (not every bare HTTP 429 rate limit).
-	if containsAny(blob,
-		"free-usage-exhausted",
-		"included free usage",
-		"usage_limit_reached",
-		"quota exhausted",
-		"subscription:free-usage",
-	) {
+	// Only Grok free-usage exhaustion (not bare 429 / generic rate limit).
+	if isFreeUsageExhausted(input.ChatCode, input.ChatError) {
 		action := "disable"
 		if disabled {
 			action = "keep"

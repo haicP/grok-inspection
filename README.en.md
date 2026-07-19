@@ -4,6 +4,14 @@
 
 CPA (CLIProxyAPI) plugin for bulk xAI/Grok account health checks, with suggested disable / enable / delete actions.
 
+## Note
+
+This is a **pure vibe-coding** plugin: it works and is practical, but the code may not be polished to traditional engineering standards.
+
+- **Issues and PRs are welcome** — bug fixes, features, UX, and refactors.
+- **If you prefer not to rely on vibe-coded plugins**, use **CPA Manager Plus** (or a similar management panel) for account inspection / ops instead.
+- This plugin is a lightweight, **optional** Grok/xAI inspection add-on — not an official reference implementation.
+
 Version: `0.1.12` · Menu: **Grok Account Inspection**
 
 ## Features

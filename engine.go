@@ -19,18 +19,19 @@ const (
 	applyPersistEvery   = 25 // persist every N bulk ops (not each) for speed
 	// CPA DELETE /auth-files supports multi-name in one request. 50 balances
 	// payload size, partial-failure reporting, and progress granularity.
-	deleteBatchSize = 50
+	deleteBatchSize     = 50
+	maxSlowRetryWorkers = 8
 )
 
 type accountResult struct {
-	AuthIndex      string `json:"auth_index"`
-	Name           string `json:"name"`
-	FileName       string `json:"file_name,omitempty"`
-	Email          string `json:"email,omitempty"`
+	AuthIndex string `json:"auth_index"`
+	Name      string `json:"name"`
+	FileName  string `json:"file_name,omitempty"`
+	Email     string `json:"email,omitempty"`
 	// FileID / FileModUnix / FileSize help incremental skip without relying on email/name.
-	FileID      string `json:"file_id,omitempty"`
-	FileModUnix int64  `json:"file_mod_unix,omitempty"`
-	FileSize    int64  `json:"file_size,omitempty"`
+	FileID         string `json:"file_id,omitempty"`
+	FileModUnix    int64  `json:"file_mod_unix,omitempty"`
+	FileSize       int64  `json:"file_size,omitempty"`
 	Disabled       bool   `json:"disabled"`
 	Classification string `json:"classification"`
 	Action         string `json:"action"`
@@ -52,21 +53,25 @@ type rowActionReport struct {
 }
 
 type jobSnapshot struct {
-	Running         bool            `json:"running"`
-	Stopped         bool            `json:"stopped"`
-	Applying        bool            `json:"applying"`
-	Incremental     bool            `json:"incremental"`
+	Running     bool `json:"running"`
+	Stopped     bool `json:"stopped"`
+	Applying    bool `json:"applying"`
+	Incremental bool `json:"incremental"`
 	// Classifications is set when this run re-probes only matching last classifications.
-	Classifications []string        `json:"classifications,omitempty"`
-	Done            int             `json:"done"`
-	Total           int             `json:"total"`
-	Workers         int             `json:"workers"`
-	IncludeDisabled bool            `json:"include_disabled"`
-	OnlyDisabled    bool            `json:"only_disabled"`
-	ApplyDone       int             `json:"apply_done"`
-	ApplyTotal      int             `json:"apply_total"`
-	ApplyCurrent    string          `json:"apply_current,omitempty"`
-	ApplyFailures   []string        `json:"apply_failures,omitempty"`
+	Classifications []string `json:"classifications,omitempty"`
+	Done            int      `json:"done"`
+	Total           int      `json:"total"`
+	Workers         int      `json:"workers"`
+	ProbePhase      string   `json:"probe_phase,omitempty"`
+	RetryDone       int      `json:"retry_done"`
+	RetryTotal      int      `json:"retry_total"`
+	RetryWorkers    int      `json:"retry_workers"`
+	IncludeDisabled bool     `json:"include_disabled"`
+	OnlyDisabled    bool     `json:"only_disabled"`
+	ApplyDone       int      `json:"apply_done"`
+	ApplyTotal      int      `json:"apply_total"`
+	ApplyCurrent    string   `json:"apply_current,omitempty"`
+	ApplyFailures   []string `json:"apply_failures,omitempty"`
 	// ActionInFlight is single-row ops still running (not bulk apply).
 	ActionInFlight int `json:"action_in_flight"`
 	// RecentRowActions holds latest completed single-row ops for light confirmation.
@@ -116,39 +121,48 @@ type authListResponse struct {
 }
 
 type inspectionEngine struct {
-	mu              sync.Mutex
-	runWG           sync.WaitGroup
-	running         bool
-	stopped         bool
-	applying        bool
-	actionInFlight  int // concurrent single-row enable/disable/delete goroutines
-	actionSeq       uint64
+	mu               sync.Mutex
+	runWG            sync.WaitGroup
+	running          bool
+	stopped          bool
+	applying         bool
+	actionInFlight   int // concurrent single-row enable/disable/delete goroutines
+	actionSeq        uint64
 	recentRowActions []rowActionReport // ring of latest completed single-row ops
-	incremental     bool
-	classifications []string // current/last scoped re-inspect classes
-	runID           uint64
-	workers         int
-	includeDisabled bool
-	onlyDisabled    bool
-	total           int
-	probeDone       int // probes completed in the current run (full or incremental)
-	results         []accountResult
-	applyDone       int
-	applyTotal      int
-	applyCurrent    string
-	applyFailures   []string
-	resultsGen      uint64 // monotonic; used by light /status clients
-	startedAt       time.Time
-	finishedAt      time.Time
+	incremental      bool
+	classifications  []string // current/last scoped re-inspect classes
+	runID            uint64
+	workers          int
+	includeDisabled  bool
+	onlyDisabled     bool
+	total            int
+	probeDone        int // probes completed in the current run (full or incremental)
+	probePhase       string
+	retryDone        int
+	retryTotal       int
+	retryWorkers     int
+	results          []accountResult
+	applyDone        int
+	applyTotal       int
+	applyCurrent     string
+	applyFailures    []string
+	resultsGen       uint64 // monotonic; used by light /status clients
+	startedAt        time.Time
+	finishedAt       time.Time
 	// Current-run bookkeeping for immediate stop (filled when targets are known).
-	runTargets      []pluginapi.HostAuthFileEntry
-	runModel        string
+	runTargets        []pluginapi.HostAuthFileEntry
+	runModel          string
 	runClassifyScoped bool
 }
 
 const maxRecentRowActions = 32
 
 var engine = &inspectionEngine{workers: defaultWorkers}
+
+var (
+	callHostAuthListFn = callHostAuthList
+	inspectAccountFn   = inspectAccount
+)
 
 func init() {
 	engine.loadFromDisk()
@@ -162,6 +176,17 @@ func normalizeWorkers(workers int) (int, error) {
 		return 0, fmt.Errorf("workers must be an integer between %d and %d", minWorkers, maxWorkers)
 	}
 	return workers, nil
+}
+
+func slowRetryWorkers(workers int) int {
+	retryWorkers := (workers + 1) / 2
+	if retryWorkers < 1 {
+		return 1
+	}
+	if retryWorkers > maxSlowRetryWorkers {
+		return maxSlowRetryWorkers
+	}
+	return retryWorkers
 }
 
 func (e *inspectionEngine) loadFromDisk() {
@@ -277,6 +302,10 @@ func (e *inspectionEngine) snapshotLocked(includeResults bool) jobSnapshot {
 		Done:             e.probeDone,
 		Total:            e.total,
 		Workers:          e.workers,
+		ProbePhase:       e.probePhase,
+		RetryDone:        e.retryDone,
+		RetryTotal:       e.retryTotal,
+		RetryWorkers:     e.retryWorkers,
 		IncludeDisabled:  e.includeDisabled,
 		OnlyDisabled:     e.onlyDisabled,
 		ApplyDone:        e.applyDone,
@@ -382,6 +411,10 @@ func (e *inspectionEngine) start(req startRequest) error {
 	}
 	e.total = 0
 	e.probeDone = 0
+	e.probePhase = "listing"
+	e.retryDone = 0
+	e.retryTotal = 0
+	e.retryWorkers = slowRetryWorkers(workers)
 	e.applyDone = 0
 	e.applyTotal = 0
 	e.applyCurrent = ""
@@ -447,6 +480,7 @@ func (e *inspectionEngine) abortRunLocked() {
 		e.total = e.probeDone
 	}
 	e.running = false
+	e.probePhase = "stopped"
 	e.finishedAt = time.Now()
 	e.runTargets = nil
 	e.bumpResultsLocked()
@@ -484,6 +518,39 @@ func (e *inspectionEngine) appendResult(runID uint64, result accountResult) {
 	}
 }
 
+// replaceResult updates a primary-phase row after a timeout retry without
+// incrementing the main account progress a second time.
+func (e *inspectionEngine) replaceResult(runID uint64, result accountResult) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.runID != runID || e.stopped {
+		return
+	}
+	if idx := findResultIndex(e.results, result); idx >= 0 {
+		e.results[idx] = result
+	} else {
+		e.results = append(e.results, result)
+	}
+	e.retryDone++
+	e.bumpResultsLocked()
+	if e.retryDone%25 == 0 {
+		e.persistLocked()
+	}
+}
+
+func (e *inspectionEngine) setRetryPhase(runID uint64, total, workers int) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.runID != runID || e.stopped {
+		return false
+	}
+	e.probePhase = "retry"
+	e.retryTotal = total
+	e.retryDone = 0
+	e.retryWorkers = workers
+	return true
+}
+
 // upsertResult replaces an existing row by stable identity, or appends if new.
 // Used by classify-scoped re-inspect so other categories stay intact.
 func (e *inspectionEngine) upsertResult(runID uint64, result accountResult) {
@@ -512,6 +579,7 @@ func (e *inspectionEngine) finish(runID uint64) {
 		return
 	}
 	e.running = false
+	e.probePhase = "finished"
 	e.finishedAt = time.Now()
 	snap := e.copyPersistedLocked()
 	e.mu.Unlock()
@@ -526,7 +594,7 @@ func (e *inspectionEngine) finish(runID uint64) {
 func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyDisabled, incremental bool, classifications []string) {
 	defer e.finish(runID)
 
-	list, errList := callHostAuthList()
+	list, errList := callHostAuthListFn()
 	if errList != nil {
 		write := e.appendResult
 		if len(classifications) > 0 {
@@ -617,6 +685,7 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 		e.runTargets = append([]pluginapi.HostAuthFileEntry(nil), targets...)
 		e.runModel = model
 		e.runClassifyScoped = classifyScoped
+		e.probePhase = "primary"
 		if e.stopped {
 			e.abortRunLocked()
 			snap := e.copyPersistedLocked()
@@ -633,6 +702,8 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup
+	var retryMu sync.Mutex
+	retryTargets := make([]pluginapi.HostAuthFileEntry, 0)
 	for i := 0; i < len(targets); i++ {
 		if e.isStopped(runID) {
 			// stop() already finalized progress; do not schedule more work.
@@ -648,10 +719,48 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 				// Aborted: stop() already wrote cancelled rows; discard this worker.
 				return
 			}
-			result := inspectAccount(file, model)
+			result := inspectAccountFn(file, model)
 			writeResult(runID, result)
+			if isAccountProbeTimeout(result) {
+				retryMu.Lock()
+				retryTargets = append(retryTargets, file)
+				retryMu.Unlock()
+			}
 		}(file)
 	}
 	wg.Wait()
+
+	if len(retryTargets) == 0 || e.isStopped(runID) {
+		return
+	}
+
+	retryWorkers := slowRetryWorkers(workers)
+	if !e.setRetryPhase(runID, len(retryTargets), retryWorkers) {
+		return
+	}
+	retrySem := make(chan struct{}, retryWorkers)
+	var retryWG sync.WaitGroup
+	for _, file := range retryTargets {
+		if e.isStopped(runID) {
+			break
+		}
+		retryWG.Add(1)
+		retrySem <- struct{}{}
+		go func(file pluginapi.HostAuthFileEntry) {
+			defer retryWG.Done()
+			defer func() { <-retrySem }()
+			if e.isStopped(runID) {
+				return
+			}
+			e.replaceResult(runID, inspectAccountFn(file, model))
+		}(file)
+	}
+	retryWG.Wait()
 }
 
+func isAccountProbeTimeout(result accountResult) bool {
+	if result.Classification != "probe_error" {
+		return false
+	}
+	return isProbeTimeoutErr(fmt.Errorf("%s %s", result.Reason, result.ErrorMessage))
+}

@@ -70,7 +70,7 @@ Each inspection run uses a fixed free-tier probe model (no per-account `/v1/mode
 model = grok-4.5  # free accounts are remapped upstream to grok-4.5-build-free
 ```
 
-Each host HTTP call has a 25s timeout with one timeout-only retry (short backoff). A whole account probe hard-caps at ~55s so one hung upstream cannot stall the job forever.
+Each host HTTP call has a 25s timeout. The primary worker performs only one attempt, so a slow account cannot occupy the same worker for two consecutive timeout windows. After all primary probes finish, timed-out accounts enter one separate retry phase at half the configured concurrency, capped at 8 workers. A whole account probe hard-caps at ~55s so an ambiguous fallback cannot stall the job forever.
 
 Every account is tested with:
 

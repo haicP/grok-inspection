@@ -937,7 +937,11 @@ func renderUIPage(pluginID string) []byte {
       const scoped = Array.isArray(snap.classifications) && snap.classifications.length > 0;
       const mode = scoped ? '分类巡检中' : (snap.incremental ? '增量巡检中' : '巡检中');
       const extra = scoped ? '（仅当前分类，保留其他结果）' : (snap.incremental ? '（仅新增，保留已有结果）' : '（后台继续）');
-      setProgress(mode + ' ' + (snap.done||0) + '/' + (snap.total||0) + ' · 并发 ' + (snap.workers||WORKERS_DEFAULT) + extra, true);
+      let phase = '';
+      if (snap.probe_phase === 'retry') {
+        phase = ' · 超时复检 ' + (snap.retry_done||0) + '/' + (snap.retry_total||0) + ' · 复检并发 ' + (snap.retry_workers||1);
+      }
+      setProgress(mode + ' ' + (snap.done||0) + '/' + (snap.total||0) + ' · 并发 ' + (snap.workers||WORKERS_DEFAULT) + phase + extra, true);
     } else if (snap.stopped) {
       const scoped = Array.isArray(snap.classifications) && snap.classifications.length > 0;
       const mode = scoped ? '分类已停止' : (snap.incremental ? '增量已停止' : '已停止');

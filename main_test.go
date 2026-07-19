@@ -161,6 +161,8 @@ func TestResourcePageHasExportAndBatchOps(t *testing.T) {
 		`function startPolling()`,
 		`function syncPolling(snap)`,
 		`snap.running || snap.applying`,
+		`snap.probe_phase === 'retry'`,
+		`超时复检`,
 		`id="incrBtn"`,
 		`增量巡检`,
 		`id="filterRunBtn"`,

@@ -6,13 +6,243 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"grok-inspection/cpasdk/pluginapi"
 )
+
+func TestSlowRetryWorkersUsesHalfWithBounds(t *testing.T) {
+	tests := map[int]int{
+		1:  1,
+		2:  1,
+		3:  2,
+		6:  3,
+		16: 8,
+	}
+	for workers, want := range tests {
+		if got := slowRetryWorkers(workers); got != want {
+			t.Fatalf("slowRetryWorkers(%d) = %d, want %d", workers, got, want)
+		}
+	}
+}
+
+func TestInspectionRetriesTimeoutsAfterPrimaryPhase(t *testing.T) {
+	oldList := callHostAuthListFn
+	oldProbe := inspectAccountFn
+	defer func() {
+		callHostAuthListFn = oldList
+		inspectAccountFn = oldProbe
+	}()
+
+	files := []pluginapi.HostAuthFileEntry{
+		{AuthIndex: "a", Name: "a.json", Provider: "xai"},
+		{AuthIndex: "b", Name: "b.json", Provider: "xai"},
+		{AuthIndex: "c", Name: "c.json", Provider: "xai"},
+	}
+	callHostAuthListFn = func() (authListResponse, error) {
+		return authListResponse{Files: files}, nil
+	}
+
+	var mu sync.Mutex
+	calls := map[string]int{}
+	retryStartedEarly := false
+	inspectAccountFn = func(file pluginapi.HostAuthFileEntry, model string) accountResult {
+		mu.Lock()
+		calls[file.AuthIndex]++
+		attempt := calls[file.AuthIndex]
+		if file.AuthIndex == "a" && attempt == 2 && (calls["b"] == 0 || calls["c"] == 0) {
+			retryStartedEarly = true
+		}
+		mu.Unlock()
+
+		if file.AuthIndex == "a" && attempt == 1 {
+			return accountResult{
+				AuthIndex:      file.AuthIndex,
+				Name:           file.Name,
+				Classification: "probe_error",
+				Action:         "keep",
+				ErrorMessage:   "HTTP probe timeout (25s)",
+			}
+		}
+		return accountResult{
+			AuthIndex:      file.AuthIndex,
+			Name:           file.Name,
+			Classification: "healthy",
+			Action:         "keep",
+		}
+	}
+
+	storePath := filepath.Join(t.TempDir(), "results.json")
+	setStoreFilePathForTest(storePath)
+	defer setStoreFilePathForTest("")
+
+	e := &inspectionEngine{
+		running: true,
+		runID:   1,
+		workers: 2,
+	}
+	e.run(1, 2, false, false, false, nil)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if retryStartedEarly {
+		t.Fatal("timeout retry started before all primary probes completed")
+	}
+	if calls["a"] != 2 || calls["b"] != 1 || calls["c"] != 1 {
+		t.Fatalf("calls = %#v", calls)
+	}
+	snap := e.snapshot(true)
+	if snap.Done != 3 || snap.Total != 3 {
+		t.Fatalf("progress = %d/%d", snap.Done, snap.Total)
+	}
+	if snap.RetryTotal != 1 || snap.RetryDone != 1 || snap.RetryWorkers != 1 {
+		t.Fatalf("retry progress = %d/%d workers=%d", snap.RetryDone, snap.RetryTotal, snap.RetryWorkers)
+	}
+	if snap.ProbePhase != "finished" {
+		t.Fatalf("phase = %q", snap.ProbePhase)
+	}
+	if len(snap.Results) != 3 {
+		t.Fatalf("results = %d", len(snap.Results))
+	}
+	for _, result := range snap.Results {
+		if result.Classification != "healthy" {
+			t.Fatalf("unexpected final result: %+v", result)
+		}
+	}
+}
+
+func TestInspectionKeepsSecondTimeoutAsFinalResult(t *testing.T) {
+	oldList := callHostAuthListFn
+	oldProbe := inspectAccountFn
+	defer func() {
+		callHostAuthListFn = oldList
+		inspectAccountFn = oldProbe
+	}()
+
+	file := pluginapi.HostAuthFileEntry{AuthIndex: "a", Name: "a.json", Provider: "xai"}
+	callHostAuthListFn = func() (authListResponse, error) {
+		return authListResponse{Files: []pluginapi.HostAuthFileEntry{file}}, nil
+	}
+	calls := 0
+	inspectAccountFn = func(file pluginapi.HostAuthFileEntry, model string) accountResult {
+		calls++
+		return accountResult{
+			AuthIndex:      file.AuthIndex,
+			Name:           file.Name,
+			Classification: "probe_error",
+			Action:         "keep",
+			ErrorMessage:   "account probe timeout",
+		}
+	}
+
+	storePath := filepath.Join(t.TempDir(), "results.json")
+	setStoreFilePathForTest(storePath)
+	defer setStoreFilePathForTest("")
+
+	e := &inspectionEngine{
+		running: true,
+		runID:   1,
+		workers: 16,
+	}
+	e.run(1, 16, false, false, false, nil)
+
+	snap := e.snapshot(true)
+	if calls != 2 {
+		t.Fatalf("calls = %d, want primary + one slow retry", calls)
+	}
+	if snap.Done != 1 || snap.Total != 1 || len(snap.Results) != 1 {
+		t.Fatalf("snapshot = done %d total %d results %d", snap.Done, snap.Total, len(snap.Results))
+	}
+	if snap.Results[0].Classification != "probe_error" || snap.Results[0].ErrorMessage != "account probe timeout" {
+		t.Fatalf("result = %+v", snap.Results[0])
+	}
+	if snap.RetryWorkers != 8 {
+		t.Fatalf("retry workers = %d", snap.RetryWorkers)
+	}
+}
+
+func TestStopDuringRetryReturnsImmediatelyAndDiscardsLateResult(t *testing.T) {
+	oldList := callHostAuthListFn
+	oldProbe := inspectAccountFn
+	defer func() {
+		callHostAuthListFn = oldList
+		inspectAccountFn = oldProbe
+	}()
+
+	file := pluginapi.HostAuthFileEntry{AuthIndex: "a", Name: "a.json", Provider: "xai"}
+	callHostAuthListFn = func() (authListResponse, error) {
+		return authListResponse{Files: []pluginapi.HostAuthFileEntry{file}}, nil
+	}
+	retryStarted := make(chan struct{})
+	releaseRetry := make(chan struct{})
+	calls := 0
+	inspectAccountFn = func(file pluginapi.HostAuthFileEntry, model string) accountResult {
+		calls++
+		if calls == 1 {
+			return accountResult{
+				AuthIndex:      file.AuthIndex,
+				Name:           file.Name,
+				Classification: "probe_error",
+				Action:         "keep",
+				ErrorMessage:   "HTTP probe timeout (25s)",
+			}
+		}
+		close(retryStarted)
+		<-releaseRetry
+		return accountResult{
+			AuthIndex:      file.AuthIndex,
+			Name:           file.Name,
+			Classification: "healthy",
+			Action:         "keep",
+		}
+	}
+
+	storePath := filepath.Join(t.TempDir(), "results.json")
+	setStoreFilePathForTest(storePath)
+	defer setStoreFilePathForTest("")
+
+	e := &inspectionEngine{
+		running: true,
+		runID:   1,
+		workers: 2,
+	}
+	runDone := make(chan struct{})
+	go func() {
+		e.run(1, 2, false, false, false, nil)
+		close(runDone)
+	}()
+	select {
+	case <-retryStarted:
+	case <-time.After(time.Second):
+		t.Fatal("retry phase did not start")
+	}
+
+	started := time.Now()
+	e.stop()
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("stop took %s", elapsed)
+	}
+	stopped := e.snapshot(true)
+	if stopped.Running || !stopped.Stopped || stopped.ProbePhase != "stopped" {
+		t.Fatalf("stopped snapshot = %+v", stopped)
+	}
+
+	close(releaseRetry)
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("run did not drain after retry was released")
+	}
+	final := e.snapshot(true)
+	if len(final.Results) != 1 || final.Results[0].Classification == "healthy" {
+		t.Fatalf("late retry must not overwrite stopped result: %+v", final.Results)
+	}
+}
 
 func TestCallCPAManagementUsesBearerPasswordAndJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

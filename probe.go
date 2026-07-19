@@ -14,18 +14,17 @@ import (
 const (
 	// xAI /v1/models currently only advertises grok-4.5; requesting that ID is remapped
 	// upstream to grok-4.5-build-free for free accounts. Direct model id grok-4.5-build-free returns 404.
-	defaultProbeModel = "grok-4.5"
-	xaiResponsesURL       = "https://cli-chat-proxy.grok.com/v1/responses"
-	xaiChatCompletionsURL = "https://cli-chat-proxy.grok.com/v1/chat/completions"
+	defaultProbeModel          = "grok-4.5"
+	xaiResponsesURL            = "https://cli-chat-proxy.grok.com/v1/responses"
+	xaiChatCompletionsURL      = "https://cli-chat-proxy.grok.com/v1/chat/completions"
 	xaiInspectionClientVersion = "0.2.93"
 
 	// host.http.do has no native timeout; wrap each call so one bad account cannot stall the whole job.
 	// Single host.http.do wall clock. 25s absorbs slow free-tier responses under concurrency.
 	probeHTTPTimeout = 25 * time.Second
-	// Whole-account budget: enough for one 25s attempt + one timeout retry (~50s), not much longer.
+	// Whole-account budget allows the primary response probe plus an ambiguous-result
+	// fallback, while timeout retries are scheduled separately by the engine.
 	accountProbeTimeout = 55 * time.Second
-	probeTimeoutRetries = 1
-	probeTimeoutBackoff = 400 * time.Millisecond
 )
 
 type apiCallResponse struct {
@@ -47,7 +46,8 @@ func resolveSharedProbeModel(_ []pluginapi.HostAuthFileEntry) string {
 }
 
 func inspectAccount(file pluginapi.HostAuthFileEntry, model string) accountResult {
-	// Hard deadline for the whole account so wg.Wait cannot stick forever.
+	// Soft whole-account deadline so the engine can mark timeout and free a worker
+	// slot. Abandoned probe work still holds hostCallGate until host.http.do returns.
 	type done struct{ result accountResult }
 	ch := make(chan done, 1)
 	go func() {
@@ -212,26 +212,16 @@ func isProbeTimeoutErr(err error) bool {
 	return strings.Contains(msg, "超时") || strings.Contains(msg, "timeout")
 }
 
-// callHostAPICall runs one timed host.http.do, and retries once on timeout only.
+// callHostAPICall runs one timed host.http.do. Timeout retries are deferred to
+// the engine's low-concurrency retry phase so slow accounts do not occupy all
+// primary workers twice.
 func callHostAPICall(authIndex, method, rawURL string, body []byte, jsonBody bool) (apiCallResponse, error) {
-	var lastErr error
-	for attempt := 0; attempt <= probeTimeoutRetries; attempt++ {
-		if attempt > 0 {
-			time.Sleep(probeTimeoutBackoff)
-		}
-		resp, err := callHostAPICallOnce(authIndex, method, rawURL, body, jsonBody)
-		if err == nil {
-			return resp, nil
-		}
-		lastErr = err
-		if !isProbeTimeoutErr(err) {
-			return apiCallResponse{}, err
-		}
-	}
-	return apiCallResponse{}, lastErr
+	return callHostAPICallOnce(authIndex, method, rawURL, body, jsonBody)
 }
 
 func callHostAPICallOnce(authIndex, method, rawURL string, body []byte, jsonBody bool) (apiCallResponse, error) {
+	// Soft deadline for UI/classification only. The underlying host call is not
+	// cancelled; acquireHostCall in callHost keeps abandoned CGO work bounded.
 	type outcome struct {
 		resp apiCallResponse
 		err  error
@@ -283,21 +273,9 @@ func callHostAPICallRaw(authIndex, method, rawURL string, body []byte, jsonBody 
 }
 
 func resolveAccessToken(authIndex string) (string, error) {
-	type outcome struct {
-		token string
-		err   error
-	}
-	ch := make(chan outcome, 1)
-	go func() {
-		token, err := resolveAccessTokenRaw(authIndex)
-		ch <- outcome{token: token, err: err}
-	}()
-	select {
-	case out := <-ch:
-		return out.token, out.err
-	case <-time.After(probeHTTPTimeout):
-		return "", fmt.Errorf("读取账号 token 超时（%s）", probeHTTPTimeout)
-	}
+	// No nested soft-timeout here: callHost already gates CGO concurrency, and
+	// callHostAPICallOnce provides the HTTP-level soft deadline for the whole probe.
+	return resolveAccessTokenRaw(authIndex)
 }
 
 func resolveAccessTokenRaw(authIndex string) (string, error) {
@@ -322,6 +300,7 @@ func resolveAccessTokenRaw(authIndex string) (string, error) {
 }
 
 func callHostAuthList() (authListResponse, error) {
+	// Soft list deadline only; callHost gates the real CGO host.auth.list call.
 	type outcome struct {
 		resp authListResponse
 		err  error

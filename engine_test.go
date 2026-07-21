@@ -51,7 +51,7 @@ func TestInspectionRetriesTimeoutsAfterPrimaryPhase(t *testing.T) {
 	var mu sync.Mutex
 	calls := map[string]int{}
 	retryStartedEarly := false
-	inspectAccountFn = func(file pluginapi.HostAuthFileEntry, model string) accountResult {
+	inspectAccountFn = func(file pluginapi.HostAuthFileEntry, model string, lang Lang) accountResult {
 		mu.Lock()
 		calls[file.AuthIndex]++
 		attempt := calls[file.AuthIndex]
@@ -129,7 +129,7 @@ func TestInspectionKeepsSecondTimeoutAsFinalResult(t *testing.T) {
 		return authListResponse{Files: []pluginapi.HostAuthFileEntry{file}}, nil
 	}
 	calls := 0
-	inspectAccountFn = func(file pluginapi.HostAuthFileEntry, model string) accountResult {
+	inspectAccountFn = func(file pluginapi.HostAuthFileEntry, model string, lang Lang) accountResult {
 		calls++
 		return accountResult{
 			AuthIndex:      file.AuthIndex,
@@ -181,7 +181,7 @@ func TestStopDuringRetryReturnsImmediatelyAndDiscardsLateResult(t *testing.T) {
 	retryStarted := make(chan struct{})
 	releaseRetry := make(chan struct{})
 	calls := 0
-	inspectAccountFn = func(file pluginapi.HostAuthFileEntry, model string) accountResult {
+	inspectAccountFn = func(file pluginapi.HostAuthFileEntry, model string, lang Lang) accountResult {
 		calls++
 		if calls == 1 {
 			return accountResult{
@@ -572,7 +572,7 @@ func TestStartRejectsInvalidWorkers(t *testing.T) {
 func TestIncrementalStartRequiresExistingResults(t *testing.T) {
 	e := &inspectionEngine{workers: defaultWorkers}
 	err := e.start(startRequest{Workers: 2, Incremental: true})
-	if err == nil || !strings.Contains(err.Error(), "增量巡检") {
+	if err == nil || !(strings.Contains(err.Error(), "增量巡检") || strings.Contains(err.Error(), "Incremental") || strings.Contains(err.Error(), "incremental")) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -848,7 +848,7 @@ func TestShutdownWaitsForAsyncPersist(t *testing.T) {
 func TestClassifyScopedStartRequiresExistingResults(t *testing.T) {
 	e := &inspectionEngine{workers: defaultWorkers}
 	err := e.start(startRequest{Workers: 2, Classifications: []string{"quota_exhausted"}})
-	if err == nil || !strings.Contains(err.Error(), "分类巡检") {
+	if err == nil || !(strings.Contains(err.Error(), "分类巡检") || strings.Contains(err.Error(), "Category") || strings.Contains(err.Error(), "category")) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -859,7 +859,7 @@ func TestClassifyScopedRejectsWithIncremental(t *testing.T) {
 		results: []accountResult{{AuthIndex: "a1", Classification: "quota_exhausted"}},
 	}
 	err := e.start(startRequest{Workers: 2, Incremental: true, Classifications: []string{"quota_exhausted"}})
-	if err == nil || !strings.Contains(err.Error(), "分类巡检") {
+	if err == nil || !(strings.Contains(err.Error(), "分类巡检") || strings.Contains(err.Error(), "Category") || strings.Contains(err.Error(), "category")) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -870,7 +870,7 @@ func TestClassifyScopedRejectsEmptyMatch(t *testing.T) {
 		results: []accountResult{{AuthIndex: "a1", Classification: "healthy"}},
 	}
 	err := e.start(startRequest{Workers: 2, Classifications: []string{"reauth"}})
-	if err == nil || !strings.Contains(err.Error(), "当前分类") {
+	if err == nil || !(strings.Contains(err.Error(), "当前分类") || strings.Contains(err.Error(), "No inspectable") || strings.Contains(err.Error(), "category")) {
 		t.Fatalf("err = %v", err)
 	}
 }

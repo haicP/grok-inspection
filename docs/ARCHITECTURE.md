@@ -134,3 +134,13 @@ The engine keeps all mutable state behind a mutex and exposes snapshots to the U
 Stop is cooperative: no new accounts are scheduled; in-flight probes still complete and are written; unscheduled accounts are recorded as cancelled (已停止，未探测) so progress can reach total.
 
 Source layout: engine.go (job lifecycle), probe.go (HTTP probe), identity.go (account matching), pply.go (bulk/row actions), management.go (CPA management HTTP).
+
+## Internationalization (i18n)
+
+- Chinese is the **default** and first-class operator language.
+- English is available via a UI language toggle (`中文` / `English`).
+- UI strings live in the page-side `I18N` pack (`ui.go`); preference key: `localStorage['grok-inspection.lang']`.
+- Runtime operator-facing reasons/errors are localized in `i18n.go` via `T(lang, key, ...)`.
+- `/start` accepts `lang` (`zh`|`en`) so probe reasons match the selected UI language.
+- Machine classification keys (`healthy`, `quota_exhausted`, …) stay stable; only human-readable text is localized.
+

@@ -60,11 +60,11 @@ func pluginRegistration() registration {
 			Author:           "ywddd",
 			GitHubRepository: "https://github.com/ywddd/grok-inspection",
 			ConfigFields: []pluginapi.ConfigField{
-				{Name: "autoban_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "是否启用自动禁用（free-usage / permission-denied / 401）。"},
-				{Name: "fallback_hours", Type: pluginapi.ConfigFieldTypeInteger, Description: "没有准确恢复时间时，free-usage-exhausted 的禁用小时数，默认 24。"},
-				{Name: "persist_state", Type: pluginapi.ConfigFieldTypeBoolean, Description: "是否将自动禁用状态保存到 state_file。"},
-				{Name: "state_file", Type: pluginapi.ConfigFieldTypeString, Description: "自动禁用状态 JSON 路径；留空时使用 data/grok-inspection/bans.json。"},
-				{Name: "log_matches", Type: pluginapi.ConfigFieldTypeBoolean, Description: "是否记录自动禁用命中日志。"},
+				{Name: "autoban_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: T(LangZH, "cfg_autoban_enabled")},
+				{Name: "fallback_hours", Type: pluginapi.ConfigFieldTypeInteger, Description: T(LangZH, "cfg_fallback_hours")},
+				{Name: "persist_state", Type: pluginapi.ConfigFieldTypeBoolean, Description: T(LangZH, "cfg_persist_state")},
+				{Name: "state_file", Type: pluginapi.ConfigFieldTypeString, Description: T(LangZH, "cfg_state_file")},
+				{Name: "log_matches", Type: pluginapi.ConfigFieldTypeBoolean, Description: T(LangZH, "cfg_log_matches")},
 			},
 		},
 		Capabilities: registrationCapabilities{
@@ -92,7 +92,7 @@ func managementRegistration() pluginapi.ManagementRegistrationResponse {
 			{
 				Path:        "/status",
 				Menu:        pluginDisplayName,
-				Description: "Grok 账号巡检与自动禁用（free-usage / 403 / 401）。",
+				Description: T(LangZH, "menu_desc"),
 			},
 		},
 	}

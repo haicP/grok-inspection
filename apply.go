@@ -607,14 +607,14 @@ func (e *inspectionEngine) runApply(applyID uint64, candidates []accountResult, 
 		banSaveErr := saveActiveStoreErr()
 		e.mu.Lock()
 		if banSaveErr != nil {
-			e.applyFailures = append(e.applyFailures, "保存自动禁用状态失败: "+banSaveErr.Error())
+			e.applyFailures = append(e.applyFailures, T(LangZH, "save_autoban_state_failed", banSaveErr.Error()))
 			if len(e.applyFailures) > 20 {
 				e.applyFailures = e.applyFailures[:20]
 			}
 		}
 		if e.applyRunID == applyID {
 			e.applying = false
-			if e.applyCurrent != "已停止" {
+			if e.applyCurrent != T(e.lang, "stopped") {
 				e.applyCurrent = ""
 			}
 		}

@@ -9,6 +9,7 @@ import (
 
 func TestClassifyPermissionDenied(t *testing.T) {
 	got := classifyProbe(classifyInput{
+		Lang: LangZH,
 		ChatStatus: 403,
 		ChatCode:   "permission-denied",
 		ChatError:  "Access to the chat endpoint is denied",
@@ -21,6 +22,7 @@ func TestClassifyPermissionDenied(t *testing.T) {
 
 func TestClassifyReauthRecommendsDelete(t *testing.T) {
 	got := classifyProbe(classifyInput{
+		Lang: LangZH,
 		ChatStatus: http.StatusUnauthorized,
 		ChatError:  "Invalid or expired credentials",
 	})
@@ -72,20 +74,20 @@ func TestResolveProbeOutcomeKeepsPrimaryQuotaWhenFallbackHealthy(t *testing.T) {
 	primary := newProbeOutcome(apiCallResponse{
 		StatusCode: http.StatusTooManyRequests,
 		Body:       `{"code":"free-usage-exhausted","error":"Included free usage has been exhausted"}`,
-	}, false)
+	}, false, LangZH)
 	fallback := newProbeOutcome(apiCallResponse{
 		StatusCode: http.StatusOK,
 		Body:       `{"choices":[{"message":{"content":"pong"}}]}`,
-	}, false)
+	}, false, LangZH)
 
-	got := resolveProbeOutcome(primary, fallback)
+	got := resolveProbeOutcome(primary, fallback, LangZH)
 	if got.Classified.Classification != "quota_exhausted" || got.Classified.Action != "disable" {
 		t.Fatalf("got %+v", got)
 	}
 	if got.Response.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", got.Response.StatusCode)
 	}
-	if !strings.Contains(got.Classified.Reason, "结果不一致") {
+	if !strings.Contains(got.Classified.Reason, "结果不一致") && !strings.Contains(got.Classified.Reason, "disagree") && !strings.Contains(got.Classified.Reason, "fallback") {
 		t.Fatalf("reason = %q", got.Classified.Reason)
 	}
 }
@@ -94,13 +96,13 @@ func TestResolveProbeOutcomeUsesFallbackForAmbiguousPrimary(t *testing.T) {
 	primary := newProbeOutcome(apiCallResponse{
 		StatusCode: http.StatusInternalServerError,
 		Body:       `{"error":"temporary upstream failure"}`,
-	}, false)
+	}, false, LangZH)
 	fallback := newProbeOutcome(apiCallResponse{
 		StatusCode: http.StatusOK,
 		Body:       `{"choices":[{"message":{"content":"pong"}}]}`,
-	}, false)
+	}, false, LangZH)
 
-	got := resolveProbeOutcome(primary, fallback)
+	got := resolveProbeOutcome(primary, fallback, LangZH)
 	if got.Classified.Classification != "healthy" {
 		t.Fatalf("got %+v", got)
 	}
@@ -108,6 +110,7 @@ func TestResolveProbeOutcomeUsesFallbackForAmbiguousPrimary(t *testing.T) {
 
 func TestClassifyBare429IsProbeErrorNotQuota(t *testing.T) {
 	got := classifyProbe(classifyInput{
+		Lang: LangZH,
 		ChatStatus: http.StatusTooManyRequests,
 		ChatError:  "rate limited",
 	})
@@ -118,6 +121,7 @@ func TestClassifyBare429IsProbeErrorNotQuota(t *testing.T) {
 
 func TestClassifyFreeUsageExhaustedIsQuota(t *testing.T) {
 	got := classifyProbe(classifyInput{
+		Lang: LangZH,
 		ChatStatus: http.StatusTooManyRequests,
 		ChatCode:   "free-usage-exhausted",
 		ChatError:  "Included free usage has been exhausted",
@@ -131,12 +135,12 @@ func TestResolveProbeOutcomeUsesFallbackWhenPrimaryBare429(t *testing.T) {
 	primary := newProbeOutcome(apiCallResponse{
 		StatusCode: http.StatusTooManyRequests,
 		Body:       `{"error":"too many requests"}`,
-	}, false)
+	}, false, LangZH)
 	fallback := newProbeOutcome(apiCallResponse{
 		StatusCode: http.StatusOK,
 		Body:       `{"choices":[{"message":{"content":"pong"}}]}`,
-	}, false)
-	got := resolveProbeOutcome(primary, fallback)
+	}, false, LangZH)
+	got := resolveProbeOutcome(primary, fallback, LangZH)
 	if got.Classified.Classification != "healthy" {
 		t.Fatalf("bare 429 + healthy fallback should be healthy, got %+v", got)
 	}
@@ -144,6 +148,7 @@ func TestResolveProbeOutcomeUsesFallbackWhenPrimaryBare429(t *testing.T) {
 
 func TestClassifyGenericQuotaTextIsNotQuotaExhausted(t *testing.T) {
 	got := classifyProbe(classifyInput{
+		Lang: LangZH,
 		ChatStatus: http.StatusTooManyRequests,
 		ChatCode:   "rate_limit",
 		ChatError:  "usage_limit_reached / quota exhausted",
@@ -187,6 +192,7 @@ func TestClassifyRealGrokFreeUsagePayload(t *testing.T) {
 		t.Fatalf("should match free usage, code=%q msg=%q", parsed.Code, parsed.Message)
 	}
 	got := classifyProbe(classifyInput{
+		Lang: LangZH,
 		ChatStatus: http.StatusTooManyRequests,
 		ChatCode:   parsed.Code,
 		ChatError:  parsed.Message,
@@ -213,6 +219,9 @@ func TestShouldTryFallback(t *testing.T) {
 }
 func TestIsProbeTimeoutErr(t *testing.T) {
 	if !isProbeTimeoutErr(fmt.Errorf("HTTP 探测超时（25s）: POST x")) {
+		t.Fatal("chinese timeout")
+	}
+	if !isProbeTimeoutErr(fmt.Errorf("HTTP probe timed out (25s): POST x")) {
 		t.Fatal("chinese timeout")
 	}
 	if !isProbeTimeoutErr(fmt.Errorf("context deadline exceeded: timeout")) {

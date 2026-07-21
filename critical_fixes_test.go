@@ -548,7 +548,7 @@ func TestClassifyScopedInspectIncludesDisabledTargets(t *testing.T) {
 	}
 	var probed []string
 	var mu sync.Mutex
-	inspectAccountFn = func(file pluginapi.HostAuthFileEntry, model string) accountResult {
+	inspectAccountFn = func(file pluginapi.HostAuthFileEntry, model string, lang Lang) accountResult {
 		mu.Lock()
 		probed = append(probed, file.AuthIndex)
 		mu.Unlock()

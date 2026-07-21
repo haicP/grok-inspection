@@ -90,6 +90,8 @@ type jobSnapshot struct {
 }
 
 type startRequest struct {
+	// Lang selects operator-facing runtime message language: "zh" (default) or "en".
+	Lang string `json:"lang"`
 	Workers         int  `json:"workers"`
 	IncludeDisabled bool `json:"include_disabled"`
 	OnlyDisabled    bool `json:"only_disabled"`
@@ -124,6 +126,7 @@ type authListResponse struct {
 }
 
 type inspectionEngine struct {
+	lang              Lang // operator-facing language for this run (default zh)
 	mu               sync.Mutex
 	runWG            sync.WaitGroup
 	persistWG        sync.WaitGroup // async persistLocked writers
@@ -416,17 +419,17 @@ func (e *inspectionEngine) start(req startRequest) error {
 	classifications := normalizeClassifications(req.Classifications)
 	classifyScoped := len(classifications) > 0
 	if classifyScoped && req.Incremental {
-		return fmt.Errorf("分类巡检不能与增量巡检同时使用")
+		return fmt.Errorf("%s", T(normalizeLang(req.Lang), "category_with_incremental"))
 	}
 
 	e.mu.Lock()
 	if e.running || e.applying || e.applyDraining {
 		e.mu.Unlock()
-		return fmt.Errorf("inspection already running")
+		return fmt.Errorf("%s", T(normalizeLang(req.Lang), "already_running"))
 	}
 	if e.actionInFlight > 0 {
 		e.mu.Unlock()
-		return fmt.Errorf("busy: row action in progress")
+		return fmt.Errorf("%s", T(normalizeLang(req.Lang), "busy_row_action"))
 	}
 	unbanJob.mu.Lock()
 	unbanBusy := unbanJob.running
@@ -437,11 +440,11 @@ func (e *inspectionEngine) start(req startRequest) error {
 	}
 	if req.Incremental && len(e.results) == 0 {
 		e.mu.Unlock()
-		return fmt.Errorf("增量巡检需要已有结果，请先完整巡检")
+		return fmt.Errorf("%s", T(normalizeLang(req.Lang), "incremental_needs_results"))
 	}
 	if classifyScoped && len(e.results) == 0 {
 		e.mu.Unlock()
-		return fmt.Errorf("分类巡检需要已有结果，请先完整巡检")
+		return fmt.Errorf("%s", T(normalizeLang(req.Lang), "category_needs_results"))
 	}
 	if classifyScoped {
 		matched := 0
@@ -453,7 +456,7 @@ func (e *inspectionEngine) start(req startRequest) error {
 		}
 		if matched == 0 {
 			e.mu.Unlock()
-			return fmt.Errorf("当前分类下没有可巡检账号")
+			return fmt.Errorf("%s", T(normalizeLang(req.Lang), "no_accounts_in_category"))
 		}
 	}
 	includeDisabled := req.IncludeDisabled
@@ -461,6 +464,7 @@ func (e *inspectionEngine) start(req startRequest) error {
 	if onlyDisabled {
 		includeDisabled = false
 	}
+	e.lang = normalizeLang(req.Lang)
 	e.running = true
 	e.stopped = false
 	e.applying = false
@@ -502,7 +506,7 @@ func (e *inspectionEngine) start(req startRequest) error {
 }
 
 // stop aborts the job immediately for the UI:
-// running flips false now, unfinished targets become "已停止，未探测",
+// running flips false now, unfinished targets become T(e.lang, "stopped_before_probe"),
 // and in-flight probe results are discarded (run continues draining in background).
 // Also cancels bulk apply and async unban jobs.
 func (e *inspectionEngine) stop() {
@@ -515,7 +519,7 @@ func (e *inspectionEngine) stop() {
 		e.applyRunID++
 		e.applying = false
 		e.applyDraining = true
-		e.applyCurrent = "已停止"
+		e.applyCurrent = T(e.lang, "stopped")
 	}
 	if !e.running {
 		snap := e.copyPersistedLocked()
@@ -727,7 +731,7 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 			Name:           "system",
 			Classification: "probe_error",
 			Action:         "keep",
-			Reason:         "列出账号失败: " + errList.Error(),
+			Reason:         T(e.lang, "list_accounts_failed", errList.Error()),
 		})
 		return
 	}
@@ -793,7 +797,7 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 			missed := item
 			missed.Classification = "probe_error"
 			missed.Action = "keep"
-			missed.Reason = "已停止，未探测"
+			missed.Reason = T(e.lang, "stopped_before_probe")
 			missed.HTTPStatus = 0
 			missed.ErrorCode = ""
 			missed.ErrorMessage = ""
@@ -803,7 +807,7 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 		missed := item
 		missed.Classification = "probe_error"
 		missed.Action = "keep"
-		missed.Reason = "Auth 列表中已不存在该账号"
+		missed.Reason = T(e.lang, "account_missing")
 		missed.HTTPStatus = 0
 		missed.ErrorCode = ""
 		missed.ErrorMessage = ""
@@ -847,7 +851,7 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 				// Aborted: stop() already wrote cancelled rows; discard this worker.
 				return
 			}
-			result := inspectAccountFn(file, model)
+			result := inspectAccountFn(file, model, e.lang)
 			writeResult(runID, result)
 			if isAccountProbeTimeout(result) {
 				retryMu.Lock()
@@ -880,7 +884,7 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 			if e.isStopped(runID) {
 				return
 			}
-			e.replaceResult(runID, inspectAccountFn(file, model))
+			e.replaceResult(runID, inspectAccountFn(file, model, e.lang))
 		}(file)
 	}
 	retryWG.Wait()

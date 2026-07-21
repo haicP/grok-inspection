@@ -45,13 +45,13 @@ func resolveSharedProbeModel(_ []pluginapi.HostAuthFileEntry) string {
 	return defaultProbeModel
 }
 
-func inspectAccount(file pluginapi.HostAuthFileEntry, model string) accountResult {
+func inspectAccount(file pluginapi.HostAuthFileEntry, model string, lang Lang) accountResult {
 	// Soft whole-account deadline so the engine can mark timeout and free a worker
 	// slot. Abandoned probe work still holds hostCallGate until host.http.do returns.
 	type done struct{ result accountResult }
 	ch := make(chan done, 1)
 	go func() {
-		ch <- done{result: inspectAccountInner(file, model)}
+		ch <- done{result: inspectAccountInner(file, model, lang)}
 	}()
 	select {
 	case d := <-ch:
@@ -69,7 +69,7 @@ func inspectAccount(file pluginapi.HostAuthFileEntry, model string) accountResul
 			Model:          firstNonEmpty(model, defaultProbeModel),
 			Classification: "probe_error",
 			Action:         "keep",
-			Reason:         fmt.Sprintf("探测超时（>%s）", accountProbeTimeout),
+			Reason:         T(lang, "probe_timeout", accountProbeTimeout),
 			ErrorMessage:   "account probe timeout",
 		}
 		if !file.ModTime.IsZero() {
@@ -79,7 +79,7 @@ func inspectAccount(file pluginapi.HostAuthFileEntry, model string) accountResul
 	}
 }
 
-func inspectAccountInner(file pluginapi.HostAuthFileEntry, model string) accountResult {
+func inspectAccountInner(file pluginapi.HostAuthFileEntry, model string, lang Lang) accountResult {
 	name := firstNonEmpty(file.Email, file.Label, file.Name, file.AuthIndex, file.ID)
 	base := accountResult{
 		AuthIndex: file.AuthIndex,
@@ -96,7 +96,7 @@ func inspectAccountInner(file pluginapi.HostAuthFileEntry, model string) account
 	if strings.TrimSpace(file.AuthIndex) == "" {
 		base.Classification = "probe_error"
 		base.Action = "keep"
-		base.Reason = "缺少 auth_index"
+		base.Reason = T(lang, "missing_auth_index")
 		return base
 	}
 
@@ -109,6 +109,7 @@ func inspectAccountInner(file pluginapi.HostAuthFileEntry, model string) account
 	chatResp, errChat := callHostAPICall(file.AuthIndex, http.MethodPost, xaiResponsesURL, []byte(chatBody), true)
 	if errChat != nil {
 		classified := classifyProbe(classifyInput{
+			Lang:         lang,
 			Disabled:     base.Disabled,
 			RequestError: errChat.Error(),
 		})
@@ -129,13 +130,13 @@ func inspectAccountInner(file pluginapi.HostAuthFileEntry, model string) account
 		}
 	}
 
-	outcome := newProbeOutcome(chatResp, base.Disabled)
+	outcome := newProbeOutcome(chatResp, base.Disabled, lang)
 	// Skip expensive fallback when primary already has a definitive classification.
 	if shouldTryFallback(chatResp.StatusCode, outcome.Classified.Classification) {
 		fallbackBody := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"ping"}],"stream":false}`, model)
 		fallbackResp, errFallback := callHostAPICall(file.AuthIndex, http.MethodPost, xaiChatCompletionsURL, []byte(fallbackBody), true)
 		if errFallback == nil {
-			outcome = resolveProbeOutcome(outcome, newProbeOutcome(fallbackResp, base.Disabled))
+			outcome = resolveProbeOutcome(outcome, newProbeOutcome(fallbackResp, base.Disabled, lang), lang)
 		}
 	}
 
@@ -170,12 +171,13 @@ func shouldTryFallback(status int, classification string) bool {
 	}
 }
 
-func newProbeOutcome(resp apiCallResponse, disabled bool) probeOutcome {
+func newProbeOutcome(resp apiCallResponse, disabled bool, lang Lang) probeOutcome {
 	parsed := extractError(resp.Body)
 	return probeOutcome{
 		Response: resp,
 		Error:    parsed,
 		Classified: classifyProbe(classifyInput{
+			Lang:         lang,
 			ChatStatus: resp.StatusCode,
 			ChatCode:   parsed.Code,
 			ChatError:  parsed.Message,
@@ -184,11 +186,11 @@ func newProbeOutcome(resp apiCallResponse, disabled bool) probeOutcome {
 	}
 }
 
-func resolveProbeOutcome(primary, fallback probeOutcome) probeOutcome {
+func resolveProbeOutcome(primary, fallback probeOutcome, lang Lang) probeOutcome {
 	switch primary.Classified.Classification {
 	case "reauth", "quota_exhausted", "permission_denied":
 		if fallback.Classified.Classification == "healthy" {
-			primary.Classified.Reason += "；备用接口结果不一致，按主探测结果判定"
+			primary.Classified.Reason += T(lang, "fallback_disagreed")
 		}
 		return primary
 	default:
@@ -214,7 +216,7 @@ func isProbeTimeoutErr(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "超时") || strings.Contains(msg, "timeout")
+	return strings.Contains(msg, "超时") || strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out")
 }
 
 // callHostAPICall runs one timed host.http.do. Timeout retries are deferred to
@@ -240,7 +242,7 @@ func callHostAPICallOnce(authIndex, method, rawURL string, body []byte, jsonBody
 	case out := <-ch:
 		return out.resp, out.err
 	case <-time.After(probeHTTPTimeout):
-		return apiCallResponse{}, fmt.Errorf("HTTP 探测超时（%s）: %s %s", probeHTTPTimeout, method, rawURL)
+		return apiCallResponse{}, fmt.Errorf("%s", T(LangZH, "http_probe_timeout", probeHTTPTimeout, method, rawURL))
 	}
 }
 
@@ -319,7 +321,7 @@ func callHostAuthList() (authListResponse, error) {
 	case out := <-ch:
 		return out.resp, out.err
 	case <-time.After(30 * time.Second):
-		return authListResponse{}, fmt.Errorf("列出账号超时（30s）")
+		return authListResponse{}, fmt.Errorf("%s", T(LangZH, "list_accounts_timeout"))
 	}
 }
 

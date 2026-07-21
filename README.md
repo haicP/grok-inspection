@@ -14,6 +14,13 @@ CPA（CLIProxyAPI）插件：批量检测 xAI / Grok 账号健康状态，并给
 
 版本：`0.1.13` · 菜单：**Grok 账号巡检**
 
+## 语言
+管理界面支持 **中英双语切换**：
+- **中文（默认）** — 本项目的第一语言
+- **English** — 页面顶部 **语言 / Language** 选择器可切换
+- 选择会保存在 `localStorage`（键名 `grok-inspection.lang`），刷新后恢复
+- 开始巡检时会把所选 `lang` 传给后端，使原因/错误文案与界面语言一致
+English docs: [README.en.md](README.en.md).
 ## 功能
 
 - 完整巡检、增量巡检、按分类重巡 Grok/xAI 账号

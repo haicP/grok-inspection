@@ -14,6 +14,13 @@ This is a **pure vibe-coding** plugin: it works and is practical, but the code m
 
 Version: `0.1.13` · Menu: **Grok Account Inspection**
 
+## Language
+The management UI is **bilingual and toggleable**:
+- **Chinese (default)** — first-class, original language of this project
+- **English** — available from the **Language / 语言** selector in the page header
+- Preference is saved in `localStorage` (`grok-inspection.lang`) and restored on reload
+- Inspection start requests send the selected `lang` so runtime reasons/errors match the UI language
+Chinese documentation remains in [README.md](README.md).
 ## Features
 
 - Full, incremental, and classification-scoped inspection for Grok/xAI accounts

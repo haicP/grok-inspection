@@ -195,7 +195,7 @@ func cancelledAccountResult(file pluginapi.HostAuthFileEntry, model string) acco
 		Model:          model,
 		Classification: "probe_error",
 		Action:         "keep",
-		Reason:         "已停止，未探测",
+		Reason:         T(LangZH, "stopped_before_probe"),
 	}
 	if !file.ModTime.IsZero() {
 		base.FileModUnix = file.ModTime.Unix()

@@ -9,7 +9,7 @@ func renderUIPage(pluginID string) []byte {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Grok 账号巡检</title>
+  <title data-i18n="title">Grok 账号巡检</title>
   <style>
     :root { color-scheme: light; }
     * { box-sizing: border-box; }
@@ -472,43 +472,51 @@ func renderUIPage(pluginID string) []byte {
     <div class="hero">
       <div>
         <div class="badge">xAI / Grok · CPA Plugin</div>
-        <h1>Grok 账号巡检</h1>
-        <p class="sub" id="heroSub">「开始巡检」清空并重测全部；「增量巡检」只测新增账号；「巡检当前分类」只重测所选分类（需先点分类卡片）；「批量操作」只作用于当前筛选；结果会自动保存。</p>
+        <h1 data-i18n="title">Grok 账号巡检</h1>
+        <p class="sub" id="heroSub" data-i18n="subtitle">「开始巡检」清空并重测全部；「增量巡检」只测新增账号；「巡检当前分类」只重测所选分类（需先点分类卡片）；「批量操作」只作用于当前筛选；结果会自动保存。</p>
+      </div>
+      <div class="controls">
+        <label class="ctl"><span data-i18n="language">语言</span>
+          <select id="langSelect" style="height:26px;border:1px solid #cbd5e1;border-radius:6px;padding:0 4px;">
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </select>
+        </label>
       </div>
     </div>
     <div class="controls shared-key" id="keyRow">
       <div class="key-row" style="flex:1;min-width:min(360px,100%%)">
-        <input id="managementKey" type="password" autocomplete="current-password" placeholder="CPA Management Key（可自动读取管理面板）">
+        <input id="managementKey" type="password" autocomplete="current-password" data-i18n-placeholder="key_label" placeholder="CPA Management Key（可自动读取管理面板）">
         <span class="hint" id="keyHint"></span>
       </div>
     </div>
-    <div class="tabs" role="tablist" aria-label="功能页签">
-      <button class="tab active" type="button" data-tab="inspect" id="tabInspect" aria-selected="true" role="tab"><span class="tab-title">账号巡检</span><span class="tab-desc">批量探测 · 建议操作</span></button>
-      <button class="tab" type="button" data-tab="autoban" id="tabAutoban" aria-selected="false" role="tab"><span class="tab-title">实时自动禁用</span><span class="tab-desc">请求拦截 · 定时恢复</span></button>
+    <div class="tabs" role="tablist" aria-label="功能页签" data-i18n-title="tabs_aria">
+      <button class="tab active" type="button" data-tab="inspect" id="tabInspect" aria-selected="true" role="tab"><span class="tab-title" data-i18n="tab_inspect">账号巡检</span><span class="tab-desc" data-i18n="tab_inspect_desc">批量探测 · 建议操作</span></button>
+      <button class="tab" type="button" data-tab="autoban" id="tabAutoban" aria-selected="false" role="tab"><span class="tab-title" data-i18n="tab_autoban">实时自动禁用</span><span class="tab-desc" data-i18n="tab_autoban_desc">请求拦截 · 定时恢复</span></button>
 
     </div>
     <section class="panel active" id="panel-inspect">
     <div class="controls">
-      <label class="ctl">并发 <input id="workers" type="number" min="1" max="16" step="1" value="6" title="1-16 的整数"></label>
-      <label class="ctl"><input id="includeDisabled" type="checkbox"> 包含已禁用</label>
-      <label class="ctl"><input id="onlyDisabled" type="checkbox"> 仅巡检已禁用</label>
-      <button id="stopBtn" disabled>停止</button>
-      <button id="applyBtn" class="soft" disabled>执行建议操作</button>
-      <button id="incrBtn" class="soft" disabled title="只检测 Auth 中相对上次结果新增的账号">增量巡检</button>
-      <button id="filterRunBtn" class="soft" disabled title="只重新探测当前卡片筛选分类下的账号，保留其他结果">巡检当前分类</button>
-      <button id="runBtn" class="primary">开始巡检</button>
+      <label class="ctl"><span data-i18n="workers">并发</span> <input id="workers" type="number" min="1" max="16" step="1" value="6" title="1-16 的整数"></label>
+      <label class="ctl"><input id="includeDisabled" type="checkbox"> <span data-i18n="include_disabled">包含已禁用</span></label>
+      <label class="ctl"><input id="onlyDisabled" type="checkbox"> <span data-i18n="only_disabled">仅巡检已禁用</span></label>
+      <button id="stopBtn" disabled data-i18n="stop">停止</button>
+      <button id="applyBtn" class="soft" disabled data-i18n="apply_suggested">执行建议操作</button>
+      <button id="incrBtn" class="soft" disabled data-i18n-title="incremental_title" title="只检测 Auth 中相对上次结果新增的账号" data-i18n="incremental">增量巡检</button>
+      <button id="filterRunBtn" class="soft" disabled data-i18n-title="category_title" title="只重新探测当前卡片筛选分类下的账号，保留其他结果" data-i18n="inspect_category">巡检当前分类</button>
+      <button id="runBtn" class="primary" data-i18n="start">开始巡检</button>
     </div>
     <div id="summary" class="summary"></div>
     <div class="bar">
       <div class="actions-row">
-        <button id="batchExportBtn" type="button" disabled>批量导出</button>
-        <button id="batchDisableBtn" class="soft" type="button" disabled>批量禁用</button>
-        <button id="batchEnableBtn" class="soft" type="button" disabled>批量启用</button>
-        <button id="batchDeleteBtn" class="danger" type="button" disabled>批量删除</button>
-        <span class="hint" id="exportHint">点击上方卡片切换分类；禁用/启用数量按当前分类下列表的启用/禁用状态统计</span>
+        <button id="batchExportBtn" type="button" disabled data-i18n="bulk_export">批量导出</button>
+        <button id="batchDisableBtn" class="soft" type="button" disabled data-i18n="bulk_disable">批量禁用</button>
+        <button id="batchEnableBtn" class="soft" type="button" disabled data-i18n="bulk_enable">批量启用</button>
+        <button id="batchDeleteBtn" class="danger" type="button" disabled data-i18n="bulk_delete">批量删除</button>
+        <span class="hint" id="exportHint" data-i18n="filter_hint">点击上方卡片切换分类；禁用/启用数量按当前分类下列表的启用/禁用状态统计</span>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:0;max-width:100%%">
-        <div id="progress" class="progress">等待开始</div>
+        <div id="progress" class="progress" data-i18n="waiting">等待开始</div>
         <pre id="error" class="err" style="margin:0;max-width:min(720px,100%%);text-align:left;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word"></pre>
       </div>
     </div>
@@ -518,13 +526,13 @@ func renderUIPage(pluginID string) []byte {
           <table class="inspect-table">
             <thead>
               <tr>
-                <th class="col-name">账号</th><th class="col-status">当前状态</th><th class="col-result">检测结果</th><th class="col-http">HTTP</th><th class="col-model">模型</th><th class="col-action">建议</th><th class="col-reason">原因</th><th class="col-ops">操作</th>
+                <th class="col-name" data-i18n="th_account">账号</th><th class="col-status" data-i18n="th_status">当前状态</th><th class="col-result" data-i18n="th_result">检测结果</th><th class="col-http" data-i18n="th_http">HTTP</th><th class="col-model" data-i18n="th_model">模型</th><th class="col-action" data-i18n="th_action">建议</th><th class="col-reason" data-i18n="th_reason">原因</th><th class="col-ops" data-i18n="th_ops">操作</th>
               </tr>
             </thead>
             <tbody id="rows"></tbody>
           </table>
         </div>
-        <div id="empty" class="empty">请输入 CPA Management Key 后加载巡检状态</div>
+        <div id="empty" class="empty" data-i18n="need_key_load">请输入 CPA Management Key 后加载巡检状态</div>
         <div id="pager" class="pager"></div>
       </div>
     </section>
@@ -532,26 +540,26 @@ func renderUIPage(pluginID string) []byte {
     <section class="panel" id="panel-autoban">
       <div class="module-bar">
         <div>
-          <h2>实时自动禁用</h2>
+          <h2 data-i18n="ban_title">实时自动禁用</h2>
         </div>
         <div class="switch-row">
           <label class="switch" title="开启后实时拦截并禁用">
             <input id="banEnabledToggle" type="checkbox">
             <span class="slider"></span>
           </label>
-          <span id="banEnabledPill" class="status-pill off">已关闭</span>
-          <span class="hint" id="banEnabledHint" class="hint">开关会立即生效并保存</span>
+          <span id="banEnabledPill" class="status-pill off" data-i18n="ban_off">已关闭</span>
+          <span class="hint" id="banEnabledHint" class="hint" data-i18n="ban_enabled_hint">开关会立即生效并保存</span>
         </div>
       </div>
       <div class="controls" style="margin-bottom:12px">
-        <button id="banRefreshBtn" class="soft" type="button">刷新状态</button>
-        <button id="banUnbanFilterBtn" class="soft" type="button" disabled>解禁当前分类</button>
-        <button id="banUnbanAllBtn" class="danger" type="button">全部解禁</button>
-        <span class="hint" id="banFilterHint" class="hint">点击下方卡片筛选分类</span>
+        <button id="banRefreshBtn" class="soft" type="button" data-i18n="ban_refresh">刷新状态</button>
+        <button id="banUnbanFilterBtn" class="soft" type="button" disabled data-i18n="ban_unban_filter">解禁当前分类</button>
+        <button id="banUnbanAllBtn" class="danger" type="button" data-i18n="ban_unban_all">全部解禁</button>
+        <span class="hint" id="banFilterHint" class="hint" data-i18n="ban_filter_hint">点击下方卡片筛选分类</span>
       </div>
       <div id="banSummary" class="summary ban-summary">
-        <div class="card active" data-ban-filter="all"><div class="k">全部</div><div class="v" id="banCount">0</div></div>
-        <div class="card" data-ban-filter="quota"><div class="k">额度用尽</div><div class="v" id="banQuotaCount">0</div></div>
+        <div class="card active" data-ban-filter="all"><div class="k" data-i18n="ban_all">全部</div><div class="v" id="banCount">0</div></div>
+        <div class="card" data-ban-filter="quota"><div class="k" data-i18n="ban_quota">额度用尽</div><div class="v" id="banQuotaCount">0</div></div>
         <div class="card" data-ban-filter="permission"><div class="k">权限拒绝</div><div class="v" id="banPermissionCount">0</div></div>
         <div class="card" data-ban-filter="unauthorized"><div class="k">401 认证失败</div><div class="v" id="banUnauthorizedCount">0</div></div>
       </div>
@@ -560,20 +568,20 @@ func renderUIPage(pluginID string) []byte {
           <table class="ban-table">
             <thead>
               <tr>
-                <th class="col-name">账号</th><th>禁用原因</th><th>禁用时间</th><th>恢复方式</th><th>剩余</th><th class="col-ops">操作</th>
+                <th class="col-name" data-i18n="th_account">账号</th><th data-i18n="ban_th_reason">禁用原因</th><th>禁用时间</th><th>恢复方式</th><th>剩余</th><th class="col-ops" data-i18n="th_ops">操作</th>
               </tr>
             </thead>
             <tbody id="banRows"></tbody>
           </table>
         </div>
-        <div id="banEmpty" class="empty">加载中…</div>
+        <div id="banEmpty" class="empty" data-i18n="ban_status_loading">加载中…</div>
         <div id="banPager" class="pager"></div>
       </div>
       <pre id="banError" class="err" style="margin-top:10px;font-size:12px;white-space:pre-wrap"></pre>
     </section>
     <div id="confirmModal" class="modal hidden" aria-hidden="true">
       <div class="modal-card" role="dialog" aria-modal="true">
-        <div id="confirmTitle" class="modal-title">确认操作</div>
+        <div id="confirmTitle" class="modal-title" data-i18n="confirm_title">确认操作</div>
         <div id="confirmMsg" class="modal-msg"></div>
         <div class="modal-actions">
           <button type="button" id="confirmCancel">取消</button>
@@ -584,7 +592,221 @@ func renderUIPage(pluginID string) []byte {
 
     </div>
   <script>
-  function namedTheme(value) {
+  const I18N = {
+    zh: {
+      tab_inspect:'账号巡检', tab_inspect_desc:'批量探测 · 建议操作',
+      tab_autoban:'实时自动禁用', tab_autoban_desc:'请求拦截 · 定时恢复',
+      tabs_aria:'功能页签',
+      ban_title:'实时自动禁用',
+      ban_enable:'开启后实时拦截并禁用',
+      ban_on:'已开启', ban_off:'已关闭',
+      ban_enabled_hint:'开关会立即生效并保存',
+      ban_refresh:'刷新状态', ban_unban_filter:'解禁当前分类', ban_unban_all:'全部解禁',
+      ban_filter_hint:'点击下方卡片筛选分类',
+      ban_all:'全部', ban_quota:'额度用尽', ban_permission:'权限被拒绝', ban_authfail:'认证失败',
+      ban_manual:'需手动解禁', ban_auto_restore:'定时自动恢复',
+      ban_th_account:'账号', ban_th_reason:'禁用原因', ban_th_time:'禁用时间', ban_th_restore:'恢复方式', ban_th_remain:'剩余',, ban_th_until:'恢复时间', ban_th_ops:'操作',
+      ban_empty:'当前没有自动禁用中的账号',
+      ban_unban:'解禁',
+      ban_status_loading:'加载中…',
+
+      title:'Grok 账号巡检',
+      subtitle:'「开始巡检」清空并重测全部；「增量巡检」只测新增账号；「巡检当前分类」只重测所选分类（需先点分类卡片）；「批量操作」只作用于当前筛选；结果会自动保存。',
+      language:'语言', key_label:'CPA Management Key（可自动读取管理面板）', workers:'并发',
+      include_disabled:'包含已禁用', only_disabled:'仅巡检已禁用', stop:'停止', apply_suggested:'执行建议操作',
+      incremental:'增量巡检', inspect_category:'巡检当前分类', start:'开始巡检',
+      incremental_title:'只检测 Auth 中相对上次结果新增的账号', category_title:'只重新探测当前卡片筛选分类下的账号，保留其他结果',
+      bulk_export:'批量导出', bulk_disable:'批量禁用', bulk_enable:'批量启用', bulk_delete:'批量删除',
+      filter_hint:'点击上方卡片切换分类；禁用/启用数量按当前分类下列表的启用/禁用状态统计',
+      waiting:'等待开始', confirm_title:'确认操作', cancel:'取消', ok:'确定',
+      th_account:'账号', th_status:'当前状态', th_result:'检测结果', th_model:'模型', th_action:'建议', th_reason:'原因', th_ops:'操作',
+      class_healthy:'健康', class_permission_denied:'权限被拒', class_quota_exhausted:'额度用尽',
+      class_reauth:'需重新登录', class_model_unavailable:'模型不可用', class_probe_error:'探测异常', class_unknown:'未知',
+      class_all:'全部', class_other:'异常',
+      action_keep:'保留', action_disable:'禁用', action_enable:'启用', action_delete:'删除',
+      enabled:'已启用', disabled:'已禁用', failed:'失败', running:'执行中',
+      need_key:'请先填写 CPA Management Key', need_key_load:'请输入 CPA Management Key 后加载巡检状态',
+      click_start:'点击“开始巡检”检测 Grok 账号',
+      workers_int_prefix:'并发必须是 ', workers_int_mid:' 的整数（当前默认 ', workers_int_suffix:'）',
+      workers_range_prefix:'并发必须在 ', workers_range_suffix:' 之间',
+      key_from_panel:'已从管理面板自动读取 Key（无需手填）', key_autofill:'已自动填充（可改）',
+      key_local:'已使用本插件本地保存的 Key',
+      key_missing:'未读到 Key：请先登录 /management.html 并勾选记住密码，或在此手动填写',
+      pick_category_first:'请先点击分类卡片选择一个分类，再巡检当前分类',
+      no_cat_prefix:'当前分类「', no_cat_suffix:'」下没有可巡检账号', cat_under:'」下', confirm_suffix:'确认',
+      still_running:'仍在执行…', action_timeout:'操作超时，请刷新后确认是否已生效',
+      delete_confirm_title:'删除确认',
+      delete_body_prefix:'将删除 CPA Auth 凭证「', delete_body_suffix:'」。\n此操作不可恢复，确认继续？',
+      no_enabled:'没有「已启用」可禁用的账号', no_disabled:'没有「已禁用」可启用的账号', no_actionable:'没有可操作的账号',
+      only_enabled_rows:'仅包含当前列表中状态为「已启用」的账号。',
+      only_disabled_rows:'仅包含当前列表中状态为「已禁用」的账号。',
+      all_in_category:'包含当前分类下全部账号。',
+      bulk_delete_api:'将调用 CPA 本体批量删除接口（DELETE /auth-files，每批最多 50 个），并更新本地结果。\n',
+      irreversible:'此操作不可恢复。',
+      bulk_patch_prefix:'将通过 CPA Management API ', bulk_patch_suffix:'账号，并更新本地结果。\n',
+      bulk_patch_note:'说明：CPA 本体没有批量启用/禁用接口，只能逐个调用 PATCH（插件侧会并发约 6 路），',
+      bulk_patch_slow:'账号多时可能较慢，上方会显示进度。\n',
+      bulk_patch_hint:'若需要更快清理，可改用「批量删除」（本体支持一次删多个）。',
+      bulk_word:'批量', current_category:'当前分类：', affected:'影响账号：', units:' 个\n',
+      will_bulk:'将对上述账号执行批量', continue_q:'请确认是否继续？',
+      started_prefix:'已启动：共 ', started_suffix:' 项（后台执行，进度见上方状态）',
+      no_export_suffix:'」下没有可导出的数据', export_confirm:'批量导出确认',
+      export_count:'导出条数：', export_rows:' 条\n\n',
+      export_body:'将导出当前分类下的全部账号（不是仅当前页）为 JSON 文件。\n\n',
+      no_export_filter:'当前筛选下没有可导出的数据',
+      showing:'显示 ', per_page:' · 每页 ', prev:'上一页', next:'下一页',
+      inspect_running:'巡检中', category_running:'分类巡检中', incremental_running:'增量巡检中',
+      category_only_keep:'（仅当前分类，保留其他结果）', incremental_only_keep:'（仅新增，保留已有结果）', bg_continue:'（后台继续）',
+      timeout_recheck:' · 超时复检 ', recheck_workers:' · 复检并发 ', workers_sep:' · 并发 ',
+      category_stopped:'分类已停止', incremental_stopped:'增量已停止', stopped:'已停止',
+      this_run:'，本轮 ', list_total:'，列表共 ', accounts_word:' 个账号',
+      inspection_complete:'巡检完成，共 ', category_complete:'分类完成：本轮检测 ', list_mid:' 个，列表共 ', list_end:' 个',
+      incremental_complete:'增量完成：本轮新增检测 ', persisted:' · 已落盘', last_fail:' · 上次操作失败 ', rows_word:' 条', rows_paren:' 条）',
+      apply_confirm_title:'执行建议操作确认',
+      apply_body_prefix:'将对全部结果中「有建议动作」的账号异步执行禁用/启用/删除（共 ',
+      apply_body_suffix:' 条建议）。\n说明：此操作按建议执行，不受上方卡片当前分类限制。\n\n',
+      start_failed:'启动失败', suggested_running_prefix:'建议操作已在后台执行：共 ', items_word:' 项',
+      suggested_started:'建议操作已启动', bg_actions:'后台执行操作 ', failed_sep:'；失败 ',
+      no_action_seq:'服务端未返回 action_seq，无法确认执行结果',
+      deleted_prefix:'删除成功：', disabled_prefix:'禁用成功：', enabled_prefix:'启用成功：', running_prefix:'执行中：'
+    },
+    en: {
+      tab_inspect:'Account inspection', tab_inspect_desc:'Batch probe · suggested actions',
+      tab_autoban:'Realtime auto-ban', tab_autoban_desc:'Request intercept · scheduled restore',
+      tabs_aria:'Feature tabs',
+      ban_title:'Realtime auto-ban',
+      ban_enable:'When on, intercept and ban in realtime',
+      ban_on:'On', ban_off:'Off',
+      ban_enabled_hint:'Toggle applies immediately and is saved',
+      ban_refresh:'Refresh status', ban_unban_filter:'Unban current filter', ban_unban_all:'Unban all',
+      ban_filter_hint:'Click a card below to filter',
+      ban_all:'All', ban_quota:'Quota exhausted', ban_permission:'Permission denied', ban_authfail:'Auth failed',
+      ban_manual:'Manual unban required', ban_auto_restore:'Auto restore on schedule',
+      ban_th_account:'Account', ban_th_reason:'Ban reason', ban_th_time:'Banned at', ban_th_restore:'Restore mode', ban_th_remain:'Remaining',, ban_th_until:'Restore at', ban_th_ops:'Actions',
+      ban_empty:'No accounts are currently auto-banned',
+      ban_unban:'Unban',
+      ban_status_loading:'Loading…',
+
+      title:'Grok Account Inspection',
+      subtitle:'"Start inspection" clears and rechecks all accounts; "Incremental inspection" only checks newly added accounts; "Inspect current category" only rechecks the selected category (click a category card first); bulk actions apply only to the current filter; results are saved automatically.',
+      language:'Language', key_label:'CPA Management Key (can auto-read from the management panel)', workers:'Workers',
+      include_disabled:'Include disabled', only_disabled:'Only inspect disabled', stop:'Stop', apply_suggested:'Apply suggested actions',
+      incremental:'Incremental inspection', inspect_category:'Inspect current category', start:'Start inspection',
+      incremental_title:'Only probe accounts newly present in Auth since the last result set', category_title:'Only re-probe accounts in the currently selected category card; keep other results',
+      bulk_export:'Bulk export', bulk_disable:'Bulk disable', bulk_enable:'Bulk enable', bulk_delete:'Bulk delete',
+      filter_hint:'Click a category card above to filter; disable/enable counts use the enabled/disabled state of the current category list',
+      waiting:'Waiting to start', confirm_title:'Confirm action', cancel:'Cancel', ok:'OK',
+      th_account:'Account', th_status:'Current status', th_result:'Probe result', th_model:'Model', th_action:'Suggestion', th_reason:'Reason', th_ops:'Actions',
+      class_healthy:'Healthy', class_permission_denied:'Permission denied', class_quota_exhausted:'Quota exhausted',
+      class_reauth:'Reauth required', class_model_unavailable:'Model unavailable', class_probe_error:'Probe error', class_unknown:'Unknown',
+      class_all:'All', class_other:'error',
+      action_keep:'Keep', action_disable:'Disable', action_enable:'Enable', action_delete:'Delete',
+      enabled:'Enabled', disabled:'Disabled', failed:'Failed', running:'Running',
+      need_key:'Enter the CPA Management Key first', need_key_load:'Enter the CPA Management Key to load inspection status',
+      click_start:'Click "Start inspection" to probe Grok accounts',
+      workers_int_prefix:'Workers must be an integer ', workers_int_mid:' (current default ', workers_int_suffix:')',
+      workers_range_prefix:'Workers must be between ', workers_range_suffix:'',
+      key_from_panel:'Key auto-loaded from the management panel (no manual entry needed)', key_autofill:'Auto-filled (editable)',
+      key_local:'Using a key previously saved by this plugin',
+      key_missing:'No key found: log in at /management.html with remember-password, or enter it here',
+      pick_category_first:'Click a category card first, then inspect the current category',
+      no_cat_prefix:'Current category "', no_cat_suffix:'" has no inspectable accounts', cat_under:' ', confirm_suffix:' confirm',
+      still_running:'Still running…', action_timeout:'Action timed out; refresh and verify whether it applied',
+      delete_confirm_title:'Confirm delete',
+      delete_body_prefix:'This will delete CPA Auth credential "', delete_body_suffix:'".\nThis cannot be undone. Continue?',
+      no_enabled:'No enabled accounts available to disable', no_disabled:'No disabled accounts available to enable', no_actionable:'No actionable accounts',
+      only_enabled_rows:'Only accounts currently listed as Enabled.',
+      only_disabled_rows:'Only accounts currently listed as Disabled.',
+      all_in_category:'Includes all accounts in the current category.',
+      bulk_delete_api:'Calls CPA bulk-delete API (DELETE /auth-files, up to 50 per batch) and updates local results.\n',
+      irreversible:'This cannot be undone.',
+      bulk_patch_prefix:'Uses the CPA Management API to ', bulk_patch_suffix:' accounts and updates local results.\n',
+      bulk_patch_note:'Note: CPA has no bulk enable/disable API, so PATCH is called one-by-one (~6 concurrent workers in the plugin). ',
+      bulk_patch_slow:'Large account sets may be slower; progress is shown above.\n',
+      bulk_patch_hint:'For faster cleanup, use Bulk delete (CPA supports multi-delete).',
+      bulk_word:'Bulk ', current_category:'Current category: ', affected:'Affected accounts: ', units:'\n',
+      will_bulk:'Will bulk-', continue_q:'Continue?',
+      started_prefix:'Started: ', started_suffix:' item(s) (running in background; see status above)',
+      no_export_suffix:'" has no exportable data', export_confirm:'Confirm bulk export',
+      export_count:'Rows to export: ', export_rows:'\n\n',
+      export_body:'Exports all accounts in the current category (not only the current page) as a JSON file.\n\n',
+      no_export_filter:'No exportable data in the current filter',
+      showing:'Showing ', per_page:' · per page ', prev:'Prev', next:'Next',
+      inspect_running:'Inspection running', category_running:'Category inspection running', incremental_running:'Incremental inspection running',
+      category_only_keep:' (current category only; keep other results)', incremental_only_keep:' (new accounts only; keep existing results)', bg_continue:' (continues in background)',
+      timeout_recheck:' · timeout recheck ', recheck_workers:' · recheck workers ', workers_sep:' · workers ',
+      category_stopped:'Category inspection stopped', incremental_stopped:'Incremental inspection stopped', stopped:'Stopped',
+      this_run:', this run ', list_total:', list total ', accounts_word:' accounts',
+      inspection_complete:'Inspection complete, ', category_complete:'Category pass complete: probed ', list_mid:', list total ', list_end:'',
+      incremental_complete:'Incremental complete: newly probed ', persisted:' · persisted', last_fail:' · last action failed ', rows_word:'', rows_paren:')',
+      apply_confirm_title:'Confirm apply suggested actions',
+      apply_body_prefix:'Will asynchronously disable/enable/delete accounts with suggested actions across all results (',
+      apply_body_suffix:' suggestion(s)).\nNote: this follows suggestions and is not limited by the category card filter above.\n\n',
+      start_failed:'Start failed', suggested_running_prefix:'Suggested actions running in background: ', items_word:' item(s)',
+      suggested_started:'Suggested actions started', bg_actions:'Background actions ', failed_sep:'; failed ',
+      no_action_seq:'Server did not return action_seq; cannot confirm the action result',
+      deleted_prefix:'Deleted: ', disabled_prefix:'Disabled: ', enabled_prefix:'Enabled: ', running_prefix:'Running: '
+    }
+  }
+
+  const LANG_KEY = 'grok-inspection.lang';
+  function detectLang() {
+    try {
+      const saved = localStorage.getItem(LANG_KEY);
+      if (saved === 'zh' || saved === 'en') return saved;
+    } catch (e) {}
+    return 'zh';
+  }
+  let lang = detectLang();
+  function t(key) {
+    const pack = I18N[lang] || I18N.zh;
+    return (pack && pack[key]) || (I18N.zh && I18N.zh[key]) || key;
+  }
+  function applyStaticI18n() {
+    document.documentElement.lang = (lang === 'en') ? 'en' : 'zh-CN';
+    document.querySelectorAll('[data-i18n]').forEach((el) => {
+      const key = el.getAttribute('data-i18n');
+      if (!key) return;
+      const val = t(key);
+      if (el.tagName === 'TITLE') document.title = val;
+      el.textContent = val;
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+      const key = el.getAttribute('data-i18n-placeholder');
+      if (!key) return;
+      el.setAttribute('placeholder', t(key));
+    });
+    document.querySelectorAll('[data-i18n-title]').forEach((el) => {
+      const key = el.getAttribute('data-i18n-title');
+      if (!key) return;
+      el.setAttribute('title', t(key));
+    });
+    const sel = document.getElementById('langSelect');
+    if (sel) sel.value = lang;
+    if (typeof classLabel !== 'undefined') {
+      classLabel.healthy = t('class_healthy');
+      classLabel.permission_denied = t('class_permission_denied');
+      classLabel.quota_exhausted = t('class_quota_exhausted');
+      classLabel.reauth = t('class_reauth');
+      classLabel.model_unavailable = t('class_model_unavailable');
+      classLabel.probe_error = t('class_probe_error');
+      classLabel.unknown = t('class_unknown');
+    }
+    if (typeof actionLabel !== 'undefined') {
+      actionLabel.keep = t('action_keep');
+      actionLabel.disable = t('action_disable');
+      actionLabel.enable = t('action_enable');
+      actionLabel.delete = t('action_delete');
+    }
+  }
+  function setLang(next) {
+    lang = (next === 'en') ? 'en' : 'zh';
+    try { localStorage.setItem(LANG_KEY, lang); } catch (e) {}
+    applyStaticI18n();
+    try { render(); } catch (e) {}
+  }
+
+    function namedTheme(value) {
     const text = String(value || '').trim().toLowerCase();
     const normalized = text.replace(/[_-]+/g, ' ');
     const tokens = normalized.split(/\s+/).filter(Boolean);
@@ -1021,7 +1243,8 @@ func renderUIPage(pluginID string) []byte {
         include_disabled: $('includeDisabled').checked,
         only_disabled: $('onlyDisabled').checked,
         incremental: false,
-        classifications: []
+        classifications: [],
+        lang: lang
       };
       if (mode === true) {
         body.incremental = true;
@@ -1224,10 +1447,10 @@ func renderUIPage(pluginID string) []byte {
   if (keyInput.value.trim()) persistManagementKey(keyInput.value);
   updateAuthState();
   const classLabel = {
-    healthy: '健康', permission_denied: '权限被拒', quota_exhausted: '额度用尽',
-    reauth: '需重新登录', model_unavailable: '模型不可用', probe_error: '探测异常', unknown: '未知'
+    healthy: t('class_healthy'), permission_denied: t('class_permission_denied'), quota_exhausted: t('class_quota_exhausted'),
+    reauth: t('class_reauth'), model_unavailable: t('class_model_unavailable'), probe_error: t('class_probe_error'), unknown: t('class_unknown')
   };
-  const actionLabel = { keep: '保留', disable: '禁用', enable: '启用', delete: '删除' };
+  const actionLabel = { keep: t('action_keep'), disable: t('action_disable'), enable: t('action_enable'), delete: t('action_delete') };
   const color = {
     healthy: '#047857', permission_denied: '#b45309', quota_exhausted: '#b45309',
     reauth: '#b91c1c', model_unavailable: '#475569', probe_error: '#b91c1c', unknown: '#475569'
@@ -2067,6 +2290,15 @@ async function setAutobanEnabled(on) {
   if (hasManagementKey()) {
     loadBans();
   }
+
+  (function bindLang() {
+    const sel = document.getElementById('langSelect');
+    if (sel) {
+      sel.value = lang;
+      sel.addEventListener('change', () => setLang(sel.value));
+    }
+    applyStaticI18n();
+  })();
 </script>
 </body>
 </html>`, base)

@@ -14,6 +14,7 @@ type probeError struct {
 }
 
 type classifyInput struct {
+	Lang         Lang
 	ChatStatus   int
 	ChatCode     string
 	ChatError    string
@@ -168,7 +169,7 @@ func classifyProbe(input classifyInput) classifyResult {
 		"invalid_grant",
 		"unauthorized",
 	) {
-		return classifyResult{Classification: "reauth", Action: "delete", Reason: "认证已过期或失效"}
+		return classifyResult{Classification: "reauth", Action: "delete", Reason: T(input.Lang, "auth_expired")}
 	}
 	// Only Grok free-usage exhaustion (not bare 429 / generic rate limit).
 	if isFreeUsageExhausted(input.ChatCode, input.ChatError) {
@@ -176,14 +177,14 @@ func classifyProbe(input classifyInput) classifyResult {
 		if disabled {
 			action = "keep"
 		}
-		return classifyResult{Classification: "quota_exhausted", Action: action, Reason: "额度已用尽"}
+		return classifyResult{Classification: "quota_exhausted", Action: action, Reason: T(input.Lang, "quota_exhausted")}
 	}
 	// Bare 429 / temporary throttling: do not recommend disable.
 	if status == http.StatusTooManyRequests {
 		return classifyResult{
 			Classification: "probe_error",
 			Action:         "keep",
-			Reason:         "临时限流 (HTTP 429)，建议稍后重试",
+			Reason:         T(input.Lang, "temp_rate_limited"),
 		}
 	}
 	if status == http.StatusPaymentRequired || status == http.StatusForbidden || containsAny(blob,
@@ -197,33 +198,33 @@ func classifyProbe(input classifyInput) classifyResult {
 		if disabled {
 			action = "keep"
 		}
-		reason := "对话权限被拒绝"
+		reason := T(input.Lang, "permission_denied")
 		if status > 0 {
 			reason = fmt.Sprintf("%s (HTTP %d)", reason, status)
 		}
 		return classifyResult{Classification: "permission_denied", Action: action, Reason: reason}
 	}
 	if status == http.StatusNotFound || containsAny(blob, "not-found", "does not exist", "no access to it") {
-		return classifyResult{Classification: "model_unavailable", Action: "keep", Reason: "测试模型不可用"}
+		return classifyResult{Classification: "model_unavailable", Action: "keep", Reason: T(input.Lang, "model_unavailable")}
 	}
 	if status >= 200 && status < 300 {
 		action := "keep"
 		if disabled {
 			action = "enable"
 		}
-		return classifyResult{Classification: "healthy", Action: action, Reason: "对话测试成功"}
+		return classifyResult{Classification: "healthy", Action: action, Reason: T(input.Lang, "chat_ok")}
 	}
 	if strings.TrimSpace(input.RequestError) != "" || status > 0 {
 		reason := strings.TrimSpace(input.RequestError)
 		if reason == "" {
-			reason = "探测失败"
+			reason = T(input.Lang, "probe_failed")
 			if status > 0 {
 				reason = fmt.Sprintf("%s (HTTP %d)", reason, status)
 			}
 		}
 		return classifyResult{Classification: "probe_error", Action: "keep", Reason: reason}
 	}
-	return classifyResult{Classification: "unknown", Action: "keep", Reason: "无法可靠分类"}
+	return classifyResult{Classification: "unknown", Action: "keep", Reason: T(input.Lang, "unable_classify")}
 }
 
 func pickModel(body string) string {

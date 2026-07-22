@@ -25,6 +25,40 @@ func resetScheduleStateForTest(partial scheduleRuntime) {
 	scheduleState.loaded = partial.loaded
 }
 
+// detachScheduleTempDir prevents the background schedule loop from writing into a
+// test TempDir after the test returns (Linux TempDir cleanup would fail otherwise).
+func detachScheduleTempDir(t *testing.T, old pluginConfig) {
+	t.Helper()
+	t.Cleanup(func() {
+		noopDir := filepath.Join(os.TempDir(), "grok-inspection-schedule-noop")
+		_ = os.MkdirAll(noopDir, 0o755)
+		off := old
+		off.ScheduleEnabled = false
+		off.StateFile = filepath.Join(noopDir, "bans.json")
+		currentConfig.Store(off)
+		scheduleState.mu.Lock()
+		scheduleState.inProgress = false
+		scheduleState.nextAt = time.Time{}
+		scheduleState.lastStatus = ""
+		scheduleState.lastError = ""
+		scheduleState.loaded = true
+		scheduleState.mu.Unlock()
+		// Let a possible in-flight maybeRunSchedule finish without touching the TempDir.
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			scheduleState.mu.Lock()
+			busy := scheduleState.inProgress
+			scheduleState.mu.Unlock()
+			if !busy {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		currentConfig.Store(old)
+		resetScheduleStateForTest(scheduleRuntime{})
+	})
+}
+
 func TestScheduleStatusOnSnapshot(t *testing.T) {
 	oldCfg := loadedConfig()
 	cfg := oldCfg
@@ -62,6 +96,7 @@ func TestScheduleStatusOnSnapshot(t *testing.T) {
 func TestScheduleSettingsAPI(t *testing.T) {
 	dir := t.TempDir()
 	old := loadedConfig()
+	detachScheduleTempDir(t, old)
 	cfg := old
 	cfg.StateFile = filepath.Join(dir, "bans.json")
 	cfg.ScheduleEnabled = false
@@ -111,6 +146,7 @@ func TestScheduleSettingsAPI(t *testing.T) {
 func TestMaybeRunScheduleSkipsWhenBusy(t *testing.T) {
 	dir := t.TempDir()
 	oldCfg := loadedConfig()
+	detachScheduleTempDir(t, oldCfg)
 	cfg := oldCfg
 	cfg.StateFile = filepath.Join(dir, "bans.json")
 	cfg.ScheduleEnabled = true
@@ -209,6 +245,7 @@ func TestUIContainsScheduleControls(t *testing.T) {
 func TestEnsureScheduleRuntimeDoesNotSlideNextAt(t *testing.T) {
 	dir := t.TempDir()
 	old := loadedConfig()
+	detachScheduleTempDir(t, old)
 	cfg := old
 	cfg.StateFile = filepath.Join(dir, "bans.json")
 	cfg.ScheduleEnabled = true
@@ -245,6 +282,7 @@ func TestEnsureScheduleRuntimeDoesNotSlideNextAt(t *testing.T) {
 func TestApplyScheduleSettingsChangeOnlyOnToggleOrInterval(t *testing.T) {
 	dir := t.TempDir()
 	old := loadedConfig()
+	detachScheduleTempDir(t, old)
 	cfg := old
 	cfg.StateFile = filepath.Join(dir, "bans.json")
 	cfg.ScheduleEnabled = true
@@ -290,6 +328,7 @@ func TestApplyScheduleSettingsChangeOnlyOnToggleOrInterval(t *testing.T) {
 func TestScheduleStatePersistsAcrossLoad(t *testing.T) {
 	dir := t.TempDir()
 	old := loadedConfig()
+	detachScheduleTempDir(t, old)
 	cfg := old
 	cfg.StateFile = filepath.Join(dir, "bans.json")
 	cfg.ScheduleEnabled = true
@@ -326,6 +365,7 @@ func TestScheduleStatePersistsAcrossLoad(t *testing.T) {
 func TestConfigureDoesNotResetScheduleNextAt(t *testing.T) {
 	dir := t.TempDir()
 	old := loadedConfig()
+	detachScheduleTempDir(t, old)
 	cfg := old
 	cfg.StateFile = filepath.Join(dir, "bans.json")
 	cfg.ScheduleEnabled = true

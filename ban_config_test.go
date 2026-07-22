@@ -135,6 +135,7 @@ func TestDecodeConfigSchedule(t *testing.T) {
 func TestUpdateScheduleSettingsPersists(t *testing.T) {
 	dir := t.TempDir()
 	old := loadedConfig()
+	detachScheduleTempDir(t, old)
 	cfg := old
 	cfg.StateFile = filepath.Join(dir, "bans.json")
 	cfg.ScheduleEnabled = false

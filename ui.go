@@ -1019,6 +1019,90 @@ func renderUIPage(pluginID string) []byte {
     return reason;
   }
 
+  function localizeKnownActionError(msg) {
+    msg = String(msg == null ? '' : msg).trim();
+    if (!msg) return msg;
+    const catalogs = [REASON_I18N.zh, REASON_I18N.en];
+    function matchWhole(m) {
+      // exact stopped / list timeout / auth file name missing / mgmt password
+      const exactKeys = ['stopped', 'list_accounts_timeout'];
+      for (const key of exactKeys) {
+        for (const cat of catalogs) {
+          if (cat[key] && m === cat[key]) return reasonText(key);
+        }
+      }
+      // auth file name missing (exact, no account)
+      const missing = {
+        zh: '账号缺少 auth 文件名',
+        en: 'auth file name missing'
+      };
+      if (m === missing.zh || m === missing.en) {
+        return lang === 'en' ? missing.en : missing.zh;
+      }
+      // management password (prefix)
+      const pw = {
+        zh: '管理密码不可用',
+        en: 'CPA management password is unavailable'
+      };
+      for (const base of [pw.en, pw.zh]) {
+        if (m === base || m.indexOf(base + ' ') === 0 || m.indexOf(base + '(') === 0 || m.indexOf(base + ' (') === 0) {
+          return lang === 'en' ? pw.en : pw.zh;
+        }
+      }
+      // prefixed patterns: head + free detail
+      const prefixes = [
+        { zh: '未找到账号: ', en: 'auth not found: ', outZh: '未找到账号: ', outEn: 'auth not found: ' },
+        { zh: '账号缺少 auth 文件名: ', en: 'auth file name missing for ', outZh: '账号缺少 auth 文件名: ', outEn: 'auth file name missing for ' },
+        { zh: '已在 CPA 启用但保存禁用状态失败: ', en: 'enabled in CPA but failed to persist ban state: ', outZh: '已在 CPA 启用但保存禁用状态失败: ', outEn: 'enabled in CPA but failed to persist ban state: ' },
+        { zh: '本地已删除但保存禁用状态失败: ', en: 'deleted locally but failed to persist ban state: ', outZh: '本地已删除但保存禁用状态失败: ', outEn: 'deleted locally but failed to persist ban state: ' },
+        { zh: '已在 CPA 删除但保存禁用状态失败: ', en: 'deleted in CPA but failed to persist ban state: ', outZh: '已在 CPA 删除但保存禁用状态失败: ', outEn: 'deleted in CPA but failed to persist ban state: ' },
+        { zh: '已在 CPA 解禁但保存禁用状态失败: ', en: 'unbanned in CPA but failed to persist ban state: ', outZh: '已在 CPA 解禁但保存禁用状态失败: ', outEn: 'unbanned in CPA but failed to persist ban state: ' },
+        { zh: '保存禁用状态: ', en: 'persist ban state: ', outZh: '保存禁用状态: ', outEn: 'persist ban state: ' },
+        { zh: '保存自动禁用状态失败: ', en: 'Failed to save auto-ban state: ', outZh: '保存自动禁用状态失败: ', outEn: 'Failed to save auto-ban state: ' }
+      ];
+      for (const p of prefixes) {
+        for (const head of [p.zh, p.en]) {
+          if (head && m.indexOf(head) === 0) {
+            const detail = m.slice(head.length);
+            return (lang === 'en' ? p.outEn : p.outZh) + detail;
+          }
+        }
+      }
+      // unsupported action "x"
+      for (const u of [{zh:'不支持的操作 "', en:'unsupported action "'}]) {
+        for (const head of [u.zh, u.en]) {
+          if (m.indexOf(head) === 0 && m.charAt(m.length - 1) === '"') {
+            const action = m.slice(head.length, m.length - 1);
+            return (lang === 'en' ? u.en : u.zh) + action + '"';
+          }
+        }
+      }
+      return null;
+    }
+    let whole = matchWhole(msg);
+    if (whole != null) return whole;
+    // account prefix: "acct: known"
+    const idx = msg.indexOf(': ');
+    if (idx > 0) {
+      const left = msg.slice(0, idx);
+      const right = msg.slice(idx + 2).trim();
+      const lower = left.toLowerCase();
+      const looksAccount = left && left.indexOf(' ') < 0 && left.indexOf('://') < 0 &&
+        lower.indexOf('http') !== 0 &&
+        lower.indexOf('auth') < 0 && lower.indexOf('password') < 0 &&
+        lower.indexOf('persist') < 0 && lower.indexOf('failed') < 0 &&
+        left.indexOf('失败') < 0 && left.indexOf('未找到') < 0 && left.indexOf('缺少') < 0;
+      if (looksAccount) {
+        const rest = matchWhole(right);
+        if (rest != null) return left + ': ' + rest;
+      }
+    }
+    // reuse reason localizer for Stopped / timeouts / etc.
+    const viaReason = localizeKnownReason(msg);
+    if (viaReason !== msg) return viaReason;
+    return msg;
+  }
+
   function setLang(next) {
     lang = (next === 'en') ? 'en' : 'zh';
     try { localStorage.setItem(LANG_KEY, lang); } catch (e) {}
@@ -1509,7 +1593,7 @@ func renderUIPage(pluginID string) []byte {
       const hit = list.find((a) => Number(a && a.seq) === Number(seq));
       if (hit) {
         if (hit.ok) return { ok: true, report: hit };
-        return { ok: false, error: hit.error || (act + ' failed'), report: hit };
+        return { ok: false, error: localizeKnownActionError(hit.error || '') || (act + ' failed'), report: hit };
       }
       lastErr = t('still_running');
       render(); // show row-busy / running
@@ -1939,13 +2023,13 @@ func renderUIPage(pluginID string) []byte {
     }
     const completedErrors = [];
     if ((snap.apply_failures || []).length && !snap.applying) {
-      completedErrors.push(...(snap.apply_failures || []));
+      completedErrors.push(...(snap.apply_failures || []).map(localizeKnownActionError));
     }
     if (snap.unban && !snap.unban.running) {
       if ((snap.unban.failures || []).length) {
-        completedErrors.push(...(snap.unban.failures || []));
+        completedErrors.push(...(snap.unban.failures || []).map(localizeKnownActionError));
       } else if (snap.unban.persist_error) {
-        completedErrors.push(t('unban_progress_complete_fail') + snap.unban.persist_error);
+        completedErrors.push(t('unban_progress_complete_fail') + localizeKnownActionError(snap.unban.persist_error));
       }
     }
     if (completedErrors.length) {
@@ -2105,7 +2189,7 @@ func renderUIPage(pluginID string) []byte {
   $('incrBtn').onclick = () => startInspection(true);
   if ($('filterRunBtn')) $('filterRunBtn').onclick = () => startInspection('filter');
   $('stopBtn').onclick = async () => {
-    try { await api('/stop', { method: 'POST', body: '{}' }); await refresh(); }
+    try { await api('/stop', { method: 'POST', body: JSON.stringify({ lang: lang }) }); await refresh(); }
     catch (e) { showErr(String(e.message || e)); }
   };
   $('applyBtn').onclick = async () => {

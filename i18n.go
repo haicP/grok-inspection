@@ -219,6 +219,46 @@ var messages = map[string]map[Lang]string{
 		LangZH: "删除批次 %d-%d/%d",
 		LangEN: "delete batch %d-%d/%d",
 	},
+	"auth_not_found": {
+		LangZH: "未找到账号: %s",
+		LangEN: "auth not found: %s",
+	},
+	"auth_file_name_missing_for": {
+		LangZH: "账号缺少 auth 文件名: %s",
+		LangEN: "auth file name missing for %s",
+	},
+	"auth_file_name_missing": {
+		LangZH: "账号缺少 auth 文件名",
+		LangEN: "auth file name missing",
+	},
+	"mgmt_password_unavailable": {
+		LangZH: "管理密码不可用",
+		LangEN: "CPA management password is unavailable",
+	},
+	"unsupported_action": {
+		LangZH: "不支持的操作 %q",
+		LangEN: "unsupported action %q",
+	},
+	"persist_ban_enabled": {
+		LangZH: "已在 CPA 启用但保存禁用状态失败: %s",
+		LangEN: "enabled in CPA but failed to persist ban state: %s",
+	},
+	"persist_ban_deleted_local": {
+		LangZH: "本地已删除但保存禁用状态失败: %s",
+		LangEN: "deleted locally but failed to persist ban state: %s",
+	},
+	"persist_ban_deleted_cpa": {
+		LangZH: "已在 CPA 删除但保存禁用状态失败: %s",
+		LangEN: "deleted in CPA but failed to persist ban state: %s",
+	},
+	"persist_ban_unbanned": {
+		LangZH: "已在 CPA 解禁但保存禁用状态失败: %s",
+		LangEN: "unbanned in CPA but failed to persist ban state: %s",
+	},
+	"persist_ban_state": {
+		LangZH: "保存禁用状态: %s",
+		LangEN: "persist ban state: %s",
+	},
 }
 
 // T returns a localized message. Missing keys fall back to Chinese, then the key.
@@ -402,6 +442,181 @@ func splitMethodURL(tail string) (method, url string, ok bool) {
 		return "", "", false
 	}
 	return method, url, true
+}
+
+// localizeKnownActionError rewrites plugin-generated fixed action/status errors
+// into the requested language. Unknown CPA/HTTP/network free text is preserved.
+func localizeKnownActionError(lang Lang, msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return msg
+	}
+	lang = normalizeLang(string(lang))
+
+	if out, ok := matchKnownActionError(lang, msg); ok {
+		return out
+	}
+
+	// Batch failures are commonly "account: error". Keep the account prefix
+	// and localize only a recognized trailing fixed error.
+	if i := strings.Index(msg, ": "); i > 0 {
+		left := msg[:i]
+		right := strings.TrimSpace(msg[i+2:])
+		if looksLikeAccountErrorPrefix(left) {
+			if out, ok := matchKnownActionError(lang, right); ok {
+				return left + ": " + out
+			}
+		}
+	}
+
+	// Reuse reason catalog for fixed status strings (Stopped / list timeout / ...).
+	if out := localizeKnownReason(lang, msg); out != msg {
+		return out
+	}
+	if out, ok := localizeApplyProgressMessage(lang, msg); ok {
+		return out
+	}
+	return msg
+}
+
+func looksLikeAccountErrorPrefix(left string) bool {
+	left = strings.TrimSpace(left)
+	if left == "" || strings.Contains(left, " ") {
+		return false
+	}
+	lower := strings.ToLower(left)
+	if strings.Contains(left, "://") || strings.HasPrefix(lower, "http") {
+		return false
+	}
+	// Avoid treating "auth not found" style phrases as account names.
+	if strings.Contains(lower, "auth") || strings.Contains(lower, "password") ||
+		strings.Contains(lower, "persist") || strings.Contains(lower, "unsupported") ||
+		strings.Contains(lower, "failed") || strings.Contains(lower, "deleted") ||
+		strings.Contains(lower, "enabled") || strings.Contains(lower, "unbanned") ||
+		strings.Contains(left, "失败") || strings.Contains(left, "缺少") ||
+		strings.Contains(left, "未找到") || strings.Contains(left, "不支持") ||
+		strings.Contains(left, "保存") || strings.Contains(left, "删除") ||
+		strings.Contains(left, "启用") || strings.Contains(left, "解禁") {
+		return false
+	}
+	return true
+}
+
+func matchKnownActionError(lang Lang, msg string) (string, bool) {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return "", false
+	}
+
+	// Exact fixed phrases (no args).
+	for _, key := range []string{
+		"stopped", "list_accounts_timeout", "auth_file_name_missing", "mgmt_password_unavailable",
+	} {
+		for _, src := range []Lang{LangZH, LangEN} {
+			cand := messages[key][src]
+			if cand != "" && msg == cand {
+				return T(lang, key), true
+			}
+		}
+	}
+	// Long EN password form includes an English parenthetical hint.
+	enPw := messages["mgmt_password_unavailable"][LangEN]
+	zhPw := messages["mgmt_password_unavailable"][LangZH]
+	if enPw != "" && (msg == enPw || strings.HasPrefix(msg, enPw+" ") || strings.HasPrefix(msg, enPw+"(") || strings.HasPrefix(msg, enPw+" (")) {
+		return T(lang, "mgmt_password_unavailable"), true
+	}
+	if zhPw != "" && (msg == zhPw || strings.HasPrefix(msg, zhPw+" ") || strings.HasPrefix(msg, zhPw+"(") || strings.HasPrefix(msg, zhPw+" (")) {
+		return T(lang, "mgmt_password_unavailable"), true
+	}
+
+	// Prefixed templates with a free-form diagnostic tail that must stay intact.
+	for _, key := range []string{
+		"auth_not_found",
+		"auth_file_name_missing_for",
+		"persist_ban_enabled",
+		"persist_ban_deleted_local",
+		"persist_ban_deleted_cpa",
+		"persist_ban_unbanned",
+		"persist_ban_state",
+		"save_autoban_state_failed",
+	} {
+		if out, ok := matchPrefixedActionError(lang, msg, key); ok {
+			return out, true
+		}
+	}
+
+	// unsupported action "x"
+	if out, ok := matchUnsupportedAction(lang, msg); ok {
+		return out, true
+	}
+	return "", false
+}
+
+func matchPrefixedActionError(lang Lang, msg, key string) (string, bool) {
+	for _, src := range []Lang{LangZH, LangEN} {
+		tpl := messages[key][src]
+		if tpl == "" || !strings.Contains(tpl, "%s") {
+			continue
+		}
+		head := tpl[:strings.Index(tpl, "%s")]
+		if head == "" || !strings.HasPrefix(msg, head) {
+			continue
+		}
+		detail := strings.TrimPrefix(msg, head)
+		return T(lang, key, detail), true
+	}
+	return "", false
+}
+
+func matchUnsupportedAction(lang Lang, msg string) (string, bool) {
+	for _, src := range []Lang{LangZH, LangEN} {
+		tpl := messages["unsupported_action"][src]
+		if tpl == "" || !strings.Contains(tpl, "%q") {
+			continue
+		}
+		head := tpl[:strings.Index(tpl, "%q")]
+		if !strings.HasPrefix(msg, head) {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(msg, head))
+		if len(rest) < 2 || rest[0] != '"' {
+			continue
+		}
+		end := strings.LastIndex(rest, `"`)
+		if end <= 0 {
+			continue
+		}
+		action := rest[1:end]
+		return T(lang, "unsupported_action", action), true
+	}
+	return "", false
+}
+
+// localizeApplyProgressMessage rewrites stored apply_current progress lines.
+func localizeApplyProgressMessage(lang Lang, msg string) (string, bool) {
+	var a, b, c int
+	if n, err := fmt.Sscanf(msg, "delete batch %d-%d/%d", &a, &b, &c); err == nil && n == 3 {
+		return T(lang, "apply_delete_batch", a, b, c), true
+	}
+	if n, err := fmt.Sscanf(msg, "删除批次 %d-%d/%d", &a, &b, &c); err == nil && n == 3 {
+		return T(lang, "apply_delete_batch", a, b, c), true
+	}
+	for _, key := range []string{"act_disable", "act_enable", "act_delete"} {
+		for _, src := range []Lang{LangZH, LangEN} {
+			verb := messages[key][src]
+			if verb == "" {
+				continue
+			}
+			prefix := verb + " "
+			if strings.HasPrefix(msg, prefix) {
+				name := strings.TrimPrefix(msg, prefix)
+				if name != "" {
+					return T(lang, key) + " " + name, true
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 func localizedActionVerb(lang Lang, action string) string {

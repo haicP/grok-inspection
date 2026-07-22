@@ -124,6 +124,11 @@ func httpErr(status int, err error) error {
 	return &httpStatusError{status: status, err: err}
 }
 
+type stopRequest struct {
+	// Lang selects operator-facing stop status language: "zh" (default) or "en".
+	Lang string `json:"lang"`
+}
+
 type startRequest struct {
 	// Lang selects operator-facing runtime message language: "zh" (default) or "en".
 	Lang            string `json:"lang"`
@@ -168,6 +173,7 @@ type authListResponse struct {
 type inspectionEngine struct {
 	lang             Lang // operator-facing language for the current/last inspection run (default zh)
 	applyLang        Lang // language for the active bulk-apply job (request-scoped)
+	stopLang         Lang // language of the latest user stop request (cancel/stop copy)
 	mu               sync.Mutex
 	runWG            sync.WaitGroup
 	persistWG        sync.WaitGroup // async persistLocked writers
@@ -404,10 +410,24 @@ func (e *inspectionEngine) snapshotWithLang(includeResults bool, lang string) jo
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	snap := e.snapshotLocked(includeResults)
-	if includeResults && lang != "" {
-		l := normalizeLang(lang)
+	if strings.TrimSpace(lang) == "" {
+		return snap
+	}
+	l := normalizeLang(lang)
+	// Results are heavy; only rewrite when the client asked for the full list.
+	if includeResults {
 		for i := range snap.Results {
 			snap.Results[i].Reason = localizeKnownReason(l, snap.Results[i].Reason)
+		}
+	}
+	// Light status still needs current-language apply/action diagnostics.
+	snap.ApplyCurrent = localizeKnownActionError(l, snap.ApplyCurrent)
+	for i := range snap.ApplyFailures {
+		snap.ApplyFailures[i] = localizeKnownActionError(l, snap.ApplyFailures[i])
+	}
+	for i := range snap.RecentRowActions {
+		if snap.RecentRowActions[i].Error != "" {
+			snap.RecentRowActions[i].Error = localizeKnownActionError(l, snap.RecentRowActions[i].Error)
 		}
 	}
 	return snap
@@ -566,25 +586,31 @@ func (e *inspectionEngine) start(req startRequest) error {
 	return nil
 }
 
-// stop aborts the job immediately for the UI:
-// running flips false now, unfinished targets become T(e.lang, "stopped_before_probe"),
+// stop aborts the job immediately for the UI (legacy/internal entrypoint).
+// Prefer stopWithLang when a request language is available.
+func (e *inspectionEngine) stop() {
+	e.stopWithLang("")
+}
+
+// stopWithLang aborts the job immediately for the UI:
+// running flips false now, unfinished targets become T(stopLang, "stopped_before_probe"),
 // and in-flight probe results are discarded (run continues draining in background).
 // Also cancels bulk apply and async unban jobs.
-func (e *inspectionEngine) stop() {
+//
+// lang is the stop request language. Empty keeps internal/shutdown callers working
+// and falls back to applyLang (when apply is active) or the inspection language.
+func (e *inspectionEngine) stopWithLang(lang string) {
 	stopUnbanJob()
 	e.mu.Lock()
 	e.stopped = true
+	stopLang := e.resolveStopLangLocked(lang)
+	e.stopLang = stopLang
 	// Cancel bulk apply without waiting for in-flight Management calls.
 	// applyDraining keeps start/apply/unban blocked until those calls finish.
 	if e.applying {
 		e.applyRunID++
 		e.applying = false
 		e.applyDraining = true
-		// Stop copy follows the apply job language, not the last inspection language.
-		stopLang := e.applyLang
-		if stopLang == "" {
-			stopLang = e.lang
-		}
 		e.applyCurrent = T(stopLang, "stopped")
 	}
 	if !e.running {
@@ -599,6 +625,26 @@ func (e *inspectionEngine) stop() {
 	e.saveSnapshotAndRecord(snap)
 }
 
+// resolveStopLangLocked picks the language used for stop-written user copy.
+func (e *inspectionEngine) resolveStopLangLocked(lang string) Lang {
+	if strings.TrimSpace(lang) != "" {
+		return normalizeLang(lang)
+	}
+	if e.applying {
+		if e.applyLang != "" {
+			return e.applyLang
+		}
+		if e.lang != "" {
+			return e.lang
+		}
+		return LangZH
+	}
+	if e.lang != "" {
+		return e.lang
+	}
+	return LangZH
+}
+
 // abortRunLocked finalizes a running job under e.mu.
 func (e *inspectionEngine) abortRunLocked() {
 	if !e.running {
@@ -610,7 +656,11 @@ func (e *inspectionEngine) abortRunLocked() {
 		if resultContainsAuthFile(e.results, file) {
 			continue
 		}
-		item := cancelledAccountResult(file, model, e.lang)
+		stopLang := e.stopLang
+		if stopLang == "" {
+			stopLang = e.lang
+		}
+		item := cancelledAccountResult(file, model, stopLang)
 		if e.runClassifyScoped {
 			if idx := findResultIndex(e.results, item); idx >= 0 {
 				e.results[idx] = item

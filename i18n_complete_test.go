@@ -746,3 +746,244 @@ func TestApplyInvalidJSONUsesI18n(t *testing.T) {
 		t.Fatalf("body=%s", string(resp.Body))
 	}
 }
+
+func TestLocalizeKnownActionErrorRoundTripAndUnknown(t *testing.T) {
+	cases := []struct {
+		en string
+		zh string
+	}{
+		{T(LangEN, "list_accounts_timeout"), T(LangZH, "list_accounts_timeout")},
+		{T(LangEN, "auth_not_found", "abc"), T(LangZH, "auth_not_found", "abc")},
+		{T(LangEN, "auth_file_name_missing_for", "x.json"), T(LangZH, "auth_file_name_missing_for", "x.json")},
+		{T(LangEN, "auth_file_name_missing"), T(LangZH, "auth_file_name_missing")},
+		{T(LangEN, "mgmt_password_unavailable"), T(LangZH, "mgmt_password_unavailable")},
+		{"CPA management password is unavailable (set MANAGEMENT_PASSWORD on CPA process)", T(LangZH, "mgmt_password_unavailable")},
+		{T(LangEN, "unsupported_action", "explode"), T(LangZH, "unsupported_action", "explode")},
+		{T(LangEN, "persist_ban_enabled", "disk full"), T(LangZH, "persist_ban_enabled", "disk full")},
+		{T(LangEN, "persist_ban_deleted_local", "io"), T(LangZH, "persist_ban_deleted_local", "io")},
+		{T(LangEN, "persist_ban_deleted_cpa", "io"), T(LangZH, "persist_ban_deleted_cpa", "io")},
+		{T(LangEN, "persist_ban_unbanned", "io"), T(LangZH, "persist_ban_unbanned", "io")},
+		{T(LangEN, "persist_ban_state", "io"), T(LangZH, "persist_ban_state", "io")},
+		{T(LangEN, "stopped"), T(LangZH, "stopped")},
+	}
+	for _, tc := range cases {
+		if got := localizeKnownActionError(LangZH, tc.en); got != tc.zh {
+			t.Fatalf("en->zh %q => %q, want %q", tc.en, got, tc.zh)
+		}
+		if got := localizeKnownActionError(LangEN, tc.zh); got != tc.en && !(strings.HasPrefix(tc.en, "CPA management password is unavailable (") && got == T(LangEN, "mgmt_password_unavailable")) {
+			// long password form collapses to short EN on reverse of ZH short form
+			if tc.zh == T(LangZH, "mgmt_password_unavailable") && got == T(LangEN, "mgmt_password_unavailable") {
+				continue
+			}
+			t.Fatalf("zh->en %q => %q, want %q", tc.zh, got, tc.en)
+		}
+	}
+
+	// Account prefix preserved, trailing known error localized.
+	enPref := "user@x.com: " + T(LangEN, "auth_not_found", "id1")
+	zhPref := "user@x.com: " + T(LangZH, "auth_not_found", "id1")
+	if got := localizeKnownActionError(LangZH, enPref); got != zhPref {
+		t.Fatalf("prefix en->zh = %q, want %q", got, zhPref)
+	}
+	if got := localizeKnownActionError(LangEN, zhPref); got != enPref {
+		t.Fatalf("prefix zh->en = %q, want %q", got, enPref)
+	}
+
+	// Unknown upstream/network free text must stay intact.
+	unknowns := []string{
+		`CPA management API returned HTTP 403: {"error":"nope"}`,
+		`Get "https://example.com": dial tcp 1.2.3.4:443: i/o timeout`,
+		`tls: handshake failure`,
+		`user@x.com: CPA management API returned HTTP 500: boom`,
+	}
+	for _, u := range unknowns {
+		if got := localizeKnownActionError(LangZH, u); got != u {
+			t.Fatalf("unknown rewritten: %q => %q", u, got)
+		}
+		if got := localizeKnownActionError(LangEN, u); got != u {
+			t.Fatalf("unknown rewritten en: %q => %q", u, got)
+		}
+	}
+}
+
+func TestSnapshotLightLocalizesApplyFields(t *testing.T) {
+	old := engine
+	engine = &inspectionEngine{
+		workers:      defaultWorkers,
+		lang:         LangZH,
+		applyCurrent: T(LangZH, "stopped"),
+		applyFailures: []string{
+			"a.json: " + T(LangZH, "auth_not_found", "a"),
+			`Get "https://x": dial tcp timeout`,
+		},
+		recentRowActions: []rowActionReport{{
+			Seq: 1, Key: "a", Action: "disable", OK: false,
+			Error: T(LangZH, "auth_file_name_missing_for", "a.json"),
+		}},
+		results: []accountResult{{
+			Name: "a", AuthIndex: "1", Reason: T(LangZH, "quota_exhausted"),
+		}},
+	}
+	t.Cleanup(func() { engine = old })
+
+	// Light status (no results) still localizes apply/action fields.
+	resp := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/management/plugins/grok-inspection/status",
+		Query:  map[string][]string{"include_results": {"0"}, "lang": {"en"}},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, string(resp.Body))
+	}
+	var payload struct {
+		ApplyCurrent     string            `json:"apply_current"`
+		ApplyFailures    []string          `json:"apply_failures"`
+		RecentRowActions []rowActionReport `json:"recent_row_actions"`
+		Results          []accountResult   `json:"results"`
+	}
+	if err := json.Unmarshal(resp.Body, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(payload.Results) != 0 {
+		t.Fatalf("light status should omit results, got %d", len(payload.Results))
+	}
+	if payload.ApplyCurrent != T(LangEN, "stopped") {
+		t.Fatalf("apply_current = %q, want %q", payload.ApplyCurrent, T(LangEN, "stopped"))
+	}
+	if len(payload.ApplyFailures) != 2 {
+		t.Fatalf("failures len=%d", len(payload.ApplyFailures))
+	}
+	wantFail0 := "a.json: " + T(LangEN, "auth_not_found", "a")
+	if payload.ApplyFailures[0] != wantFail0 {
+		t.Fatalf("failure[0] = %q, want %q", payload.ApplyFailures[0], wantFail0)
+	}
+	if payload.ApplyFailures[1] != `Get "https://x": dial tcp timeout` {
+		t.Fatalf("unknown failure rewritten: %q", payload.ApplyFailures[1])
+	}
+	if len(payload.RecentRowActions) != 1 {
+		t.Fatalf("recent len=%d", len(payload.RecentRowActions))
+	}
+	wantErr := T(LangEN, "auth_file_name_missing_for", "a.json")
+	if payload.RecentRowActions[0].Error != wantErr {
+		t.Fatalf("recent error = %q, want %q", payload.RecentRowActions[0].Error, wantErr)
+	}
+}
+
+func TestStopUsesRequestLangForCancelAndApplyCurrent(t *testing.T) {
+	old := engine
+	engine = &inspectionEngine{
+		workers: defaultWorkers,
+		lang:    LangZH, // inspection started in Chinese
+		running: true,
+		stopped: false,
+		total:   1,
+		runTargets: []pluginapi.HostAuthFileEntry{{
+			AuthIndex: "n1", Name: "n1.json", Email: "n1@x.com",
+		}},
+		runModel:     "grok",
+		applying:     true,
+		applyLang:    LangZH,
+		applyCurrent: "禁用 n1.json",
+	}
+	t.Cleanup(func() { engine = old })
+
+	resp := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodPost,
+		Path:   "/v0/management/plugins/grok-inspection/stop",
+		Body:   []byte(`{"lang":"en"}`),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status=%d body=%s", resp.StatusCode, string(resp.Body))
+	}
+	var payload struct {
+		ApplyCurrent string `json:"apply_current"`
+		Stopped      bool   `json:"stopped"`
+		Running      bool   `json:"running"`
+	}
+	if err := json.Unmarshal(resp.Body, &payload); err != nil {
+		t.Fatalf("unmarshal: %v body=%s", err, string(resp.Body))
+	}
+	if payload.Running {
+		t.Fatal("expected not running after stop")
+	}
+	if payload.ApplyCurrent != T(LangEN, "stopped") {
+		t.Fatalf("apply_current = %q, want %q", payload.ApplyCurrent, T(LangEN, "stopped"))
+	}
+
+	engine.mu.Lock()
+	var cancelled string
+	for _, r := range engine.results {
+		if r.AuthIndex == "n1" {
+			cancelled = r.Reason
+		}
+	}
+	engine.mu.Unlock()
+	if cancelled != T(LangEN, "stopped_before_probe") {
+		t.Fatalf("cancelled reason = %q, want %q", cancelled, T(LangEN, "stopped_before_probe"))
+	}
+
+	// /status?lang=zh should re-localize stored English cancel reason.
+	status := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/management/plugins/grok-inspection/status",
+		Query:  map[string][]string{"include_results": {"1"}, "lang": {"zh"}},
+	})
+	var st struct {
+		Results []struct {
+			AuthIndex string `json:"auth_index"`
+			Reason    string `json:"reason"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(status.Body, &st); err != nil {
+		t.Fatalf("status unmarshal: %v", err)
+	}
+	found := false
+	for _, r := range st.Results {
+		if r.AuthIndex == "n1" {
+			found = true
+			if r.Reason != T(LangZH, "stopped_before_probe") {
+				t.Fatalf("status reason zh = %q", r.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("cancelled row missing from status")
+	}
+}
+
+func TestStopInvalidJSONReturns400(t *testing.T) {
+	old := engine
+	engine = &inspectionEngine{workers: defaultWorkers}
+	t.Cleanup(func() { engine = old })
+
+	resp := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodPost,
+		Path:   "/v0/management/plugins/grok-inspection/stop",
+		Body:   []byte(`{lang:`),
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, string(resp.Body))
+	}
+	// Must not start/stop side effects that require valid body — engine still idle.
+	if engine.running || engine.stopped {
+		// stop shouldn't run on invalid JSON
+		t.Fatalf("invalid JSON must not invoke stop: running=%v stopped=%v", engine.running, engine.stopped)
+	}
+}
+
+func TestUIStopBodyIncludesLangAndActionErrorLocalizer(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	if !strings.Contains(page, "api('/stop'") {
+		t.Fatal("stop API call missing")
+	}
+	idx := strings.Index(page, "api('/stop'")
+	if idx < 0 || !strings.Contains(page[idx:idx+120], "lang: lang") {
+		t.Fatal("stop POST body must include lang")
+	}
+	if !strings.Contains(page, "function localizeKnownActionError(") {
+		t.Fatal("UI must define localizeKnownActionError")
+	}
+	if !strings.Contains(page, ".map(localizeKnownActionError)") {
+		t.Fatal("completedErrors must re-localize known action errors")
+	}
+}

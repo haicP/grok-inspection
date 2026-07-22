@@ -136,8 +136,16 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		}
 		return jsonResponse(http.StatusOK, engine.snapshot(true))
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/stop"):
-		engine.stop() // also cancels bulk apply / unban jobs
-		return jsonResponse(http.StatusOK, engine.snapshot(false))
+		var body stopRequest
+		if len(req.Body) > 0 {
+			if err := json.Unmarshal(req.Body, &body); err != nil {
+				lang := peekJSONLang(req.Body)
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": T(lang, "invalid_json")})
+			}
+		}
+		// Request-scoped stop language for apply_current / cancelled probe reasons.
+		engine.stopWithLang(body.Lang)
+		return jsonResponse(http.StatusOK, engine.snapshotWithLang(false, body.Lang))
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/apply"):
 		var body applyRequest
 		if len(req.Body) > 0 {

@@ -125,7 +125,10 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/start"):
 		var body startRequest
 		if len(req.Body) > 0 {
-			_ = json.Unmarshal(req.Body, &body)
+			if err := json.Unmarshal(req.Body, &body); err != nil {
+				lang := peekJSONLang(req.Body)
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": T(lang, "invalid_json")})
+			}
 		}
 		if err := engine.start(body); err != nil {
 			status := statusFromError(err, http.StatusConflict)
@@ -139,7 +142,8 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		var body applyRequest
 		if len(req.Body) > 0 {
 			if err := json.Unmarshal(req.Body, &body); err != nil {
-				return jsonResponse(http.StatusBadRequest, map[string]any{"error": "invalid JSON body", "ok": false})
+				lang := peekJSONLang(req.Body)
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": T(lang, "invalid_json"), "ok": false})
 			}
 		}
 		// Async: returns immediately so status/action stay responsive and delete
@@ -147,14 +151,9 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		// Capture page Management Key for background delete/auth API calls.
 		password := resolveManagementPassword(req.Headers)
 		if err := engine.startApply(body, password, req.Headers); err != nil {
+			// Status comes from typed httpStatusError only (no English string matching).
 			status := statusFromError(err, http.StatusConflict)
-			msg := err.Error()
-			// Input validation only → 400. "no recommended actions" stays 409 Conflict
-			// (empty suggestion set is a conflict with current job/results state, not bad input).
-			if strings.Contains(msg, "force_action") || strings.Contains(msg, "requires") || strings.Contains(msg, "no accounts") {
-				status = http.StatusBadRequest
-			}
-			return jsonResponse(status, map[string]any{"error": msg})
+			return jsonResponse(status, map[string]any{"error": err.Error()})
 		}
 		// Slim ack — full account list is only on GET /status (include_results=1).
 		snap := engine.snapshot(false)
@@ -169,16 +168,14 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		var body actionRequest
 		if len(req.Body) > 0 {
 			if err := json.Unmarshal(req.Body, &body); err != nil {
-				return jsonResponse(http.StatusBadRequest, map[string]any{"error": err.Error()})
+				lang := peekJSONLang(req.Body)
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": T(lang, "invalid_json"), "ok": false})
 			}
 		}
 		password := resolveManagementPassword(req.Headers)
 		seq, action, err := engine.startAction(body, password, req.Headers)
 		if err != nil {
 			status := statusFromError(err, http.StatusConflict)
-			if strings.Contains(err.Error(), "required") {
-				status = http.StatusBadRequest
-			}
 			return jsonResponse(status, map[string]any{"error": err.Error(), "ok": false})
 		}
 		// 202 = accepted only. Clients must poll light /status for recent_row_actions[seq].
@@ -377,4 +374,22 @@ func firstQueryValue(req pluginapi.ManagementRequest, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(vals[0])
+}
+
+// peekJSONLang best-effort extracts lang from a request body for invalid-JSON replies.
+// Fully invalid JSON defaults to Chinese.
+func peekJSONLang(body []byte) Lang {
+	var peek struct {
+		Lang string `json:"lang"`
+	}
+	if err := json.Unmarshal(body, &peek); err == nil {
+		return normalizeLang(peek.Lang)
+	}
+	// Malformed bodies may still contain a lang field; accept common spellings.
+	s := strings.ToLower(string(body))
+	if strings.Contains(s, `"lang":"en"`) || strings.Contains(s, `"lang": "en"`) ||
+		strings.Contains(s, `"lang":"en-`) || strings.Contains(s, `"lang": "en-`) {
+		return LangEN
+	}
+	return LangZH
 }

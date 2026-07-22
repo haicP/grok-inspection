@@ -162,6 +162,31 @@ var messages = map[string]map[Lang]string{
 		LangZH: "保存自动禁用状态失败: %s",
 		LangEN: "Failed to save auto-ban state: %s",
 	},
+	"invalid_json": {
+		LangZH: "请求 JSON 无效",
+		LangEN: "invalid JSON body",
+	},
+	"force_action_invalid": {
+		LangZH: "force_action 必须是 disable、enable 或 delete",
+		LangEN: "force_action must be disable, enable, or delete",
+	},
+	"force_action_requires_targets": {
+		LangZH: "force_action 需要提供 auth_indexes 或 classifications",
+		LangEN: "force_action requires auth_indexes or classifications",
+	},
+	"no_accounts_matched": {
+		LangZH: "当前选择下没有匹配的账号",
+		LangEN: "no accounts matched current selection",
+	},
+	"no_recommended_actions": {
+		LangZH: "没有可执行的建议操作",
+		LangEN: "no recommended actions",
+	},
+	"name_or_auth_required": {
+		LangZH: "需要提供 name 或 auth_index",
+		LangEN: "name or auth_index required",
+	},
+
 	"busy_unban": {
 		LangZH: "忙：解禁进行中",
 		LangEN: "busy: unban in progress",

@@ -490,14 +490,14 @@ func renderUIPage(pluginID string) []byte {
         <span class="hint" id="keyHint"></span>
       </div>
     </div>
-    <div class="tabs" role="tablist" aria-label="功能页签" data-i18n-title="tabs_aria">
+    <div class="tabs" role="tablist" aria-label="功能页签" data-i18n-aria-label="tabs_aria">
       <button class="tab active" type="button" data-tab="inspect" id="tabInspect" aria-selected="true" role="tab"><span class="tab-title" data-i18n="tab_inspect">账号巡检</span><span class="tab-desc" data-i18n="tab_inspect_desc">批量探测 · 建议操作</span></button>
       <button class="tab" type="button" data-tab="autoban" id="tabAutoban" aria-selected="false" role="tab"><span class="tab-title" data-i18n="tab_autoban">实时自动禁用</span><span class="tab-desc" data-i18n="tab_autoban_desc">请求拦截 · 定时恢复</span></button>
 
     </div>
     <section class="panel active" id="panel-inspect">
     <div class="controls">
-      <label class="ctl"><span data-i18n="workers">并发</span> <input id="workers" type="number" min="1" max="16" step="1" value="6" title="1-16 的整数"></label>
+      <label class="ctl"><span data-i18n="workers">并发</span> <input id="workers" type="number" min="1" max="16" step="1" value="6" data-i18n-title="workers_title" title="1-16 的整数"></label>
       <label class="ctl"><input id="includeDisabled" type="checkbox"> <span data-i18n="include_disabled">包含已禁用</span></label>
       <label class="ctl"><input id="onlyDisabled" type="checkbox"> <span data-i18n="only_disabled">仅巡检已禁用</span></label>
       <button id="stopBtn" disabled data-i18n="stop">停止</button>
@@ -596,7 +596,7 @@ func renderUIPage(pluginID string) []byte {
     zh: {
       tab_inspect:'账号巡检', tab_inspect_desc:'批量探测 · 建议操作',
       tab_autoban:'实时自动禁用', tab_autoban_desc:'请求拦截 · 定时恢复',
-      tabs_aria:'功能页签',
+      tabs_aria:'功能页签', workers_title:'1-16 的整数',
       ban_title:'实时自动禁用',
       ban_enable:'开启后实时拦截并禁用',
       ban_on:'已开启', ban_off:'已关闭',
@@ -678,7 +678,7 @@ func renderUIPage(pluginID string) []byte {
       no_cat_action_mid:'」下',
       export_hint_prefix:'当前分类：',
       unban_running:'解禁进行中 ', unban_fail_sep:' · 失败 ', unban_persist_sep:' · 保存失败: ',
-      apply_progress:'后台执行操作 ',
+      apply_progress:'后台执行操作 ', apply_progress_sep:'：',
       persist_fail_sep:' · 保存失败: ',
       unban_progress_complete_fail:'保存自动禁用状态失败: ',
       hours_minutes_mid:' 小时 ', hours_minutes_suffix:' 分', minutes_suffix:' 分',
@@ -714,7 +714,7 @@ func renderUIPage(pluginID string) []byte {
     en: {
       tab_inspect:'Account inspection', tab_inspect_desc:'Batch probe · suggested actions',
       tab_autoban:'Realtime auto-ban', tab_autoban_desc:'Request intercept · scheduled restore',
-      tabs_aria:'Feature tabs',
+      tabs_aria:'Feature tabs', workers_title:'Integer from 1 to 16',
       ban_title:'Realtime auto-ban',
       ban_enable:'When on, intercept and ban in realtime',
       ban_on:'On', ban_off:'Off',
@@ -796,7 +796,7 @@ func renderUIPage(pluginID string) []byte {
       no_cat_action_mid:'" — ',
       export_hint_prefix:'Current category: ',
       unban_running:'Unban in progress ', unban_fail_sep:' · failed ', unban_persist_sep:' · save failed: ',
-      apply_progress:'Background actions ',
+      apply_progress:'Background actions ', apply_progress_sep:': ',
       persist_fail_sep:' · save failed: ',
       unban_progress_complete_fail:'Failed to save auto-ban state: ',
       hours_minutes_mid:'h ', hours_minutes_suffix:'m', minutes_suffix:'m',
@@ -862,6 +862,11 @@ func renderUIPage(pluginID string) []byte {
       const key = el.getAttribute('data-i18n-title');
       if (!key) return;
       el.setAttribute('title', t(key));
+    });
+    document.querySelectorAll('[data-i18n-aria-label]').forEach((el) => {
+      const key = el.getAttribute('data-i18n-aria-label');
+      if (!key) return;
+      el.setAttribute('aria-label', t(key));
     });
     const sel = document.getElementById('langSelect');
     if (sel) sel.value = lang;
@@ -1902,7 +1907,7 @@ func renderUIPage(pluginID string) []byte {
       if ((snap.unban.failures || []).length) msg += t('unban_fail_sep') + snap.unban.failures.length; if (snap.unban.persist_error) msg += t('unban_persist_sep') + snap.unban.persist_error;
       setProgress(msg, true);
     } else if (snap.applying) {
-      let msg = t('apply_progress') + (snap.apply_done||0) + '/' + (snap.apply_total||0) + (snap.apply_current ? '：' + snap.apply_current : '');
+      let msg = t('apply_progress') + (snap.apply_done||0) + '/' + (snap.apply_total||0) + (snap.apply_current ? t('apply_progress_sep') + snap.apply_current : '');
       if ((snap.apply_failures || []).length) msg += t('failed_sep') + snap.apply_failures.length;
       setProgress(msg, true);
     } else if (snap.running) {

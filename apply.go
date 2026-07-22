@@ -398,7 +398,7 @@ func normalizeForceAction(value string) (string, error) {
 	case "", "disable", "enable", "delete":
 		return value, nil
 	default:
-		return "", fmt.Errorf("force_action must be disable, enable, or delete")
+		return "", fmt.Errorf("force_action_invalid")
 	}
 }
 
@@ -427,16 +427,17 @@ func itemSelected(item accountResult, indexSet, classSet map[string]struct{}) bo
 }
 
 func (e *inspectionEngine) collectCandidates(req applyRequest) ([]accountResult, error) {
+	lang := normalizeLang(req.Lang)
 	force, errForce := normalizeForceAction(req.ForceAction)
 	if errForce != nil {
-		return nil, errForce
+		return nil, httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "force_action_invalid")))
 	}
 	indexSet := stringSet(req.AuthIndexes)
 	actionSet := stringSet(req.Actions)
 	classSet := stringSet(req.Classifications)
 	// Filter-based bulk ops must name targets (or classification) explicitly.
 	if force != "" && len(indexSet) == 0 && len(classSet) == 0 {
-		return nil, fmt.Errorf("force_action requires auth_indexes or classifications")
+		return nil, httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "force_action_requires_targets")))
 	}
 
 	candidates := make([]accountResult, 0)
@@ -499,9 +500,9 @@ func (e *inspectionEngine) startApply(req applyRequest, password string, headers
 	if len(candidates) == 0 {
 		e.mu.Unlock()
 		if strings.TrimSpace(req.ForceAction) != "" {
-			return fmt.Errorf("no accounts matched current selection")
+			return httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "no_accounts_matched")))
 		}
-		return fmt.Errorf("no recommended actions")
+		return httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "no_recommended_actions")))
 	}
 	e.applying = true
 	e.applyRunID++
@@ -529,9 +530,10 @@ func (e *inspectionEngine) startApply(req applyRequest, password string, headers
 // Returns action_seq so clients can poll light /status.recent_row_actions
 // until that seq is reported — do not treat 202 alone as success.
 func (e *inspectionEngine) startAction(req actionRequest, password string, headers http.Header) (uint64, string, error) {
+	lang := normalizeLang(req.Lang)
 	name := firstNonEmpty(req.Name, req.AuthIndex)
 	if name == "" {
-		return 0, "", fmt.Errorf("name or auth_index required")
+		return 0, "", httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "name_or_auth_required")))
 	}
 	action := "enable"
 	if req.Delete {
@@ -541,7 +543,6 @@ func (e *inspectionEngine) startAction(req actionRequest, password string, heade
 	}
 	key := firstNonEmpty(req.AuthIndex, req.Name, name)
 
-	lang := normalizeLang(req.Lang)
 	e.mu.Lock()
 	if e.running {
 		e.mu.Unlock()

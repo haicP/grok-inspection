@@ -588,3 +588,161 @@ func TestUIApplyActionBodiesIncludeLang(t *testing.T) {
 		t.Fatal("force apply POST body missing lang")
 	}
 }
+
+func TestStartRejectsInvalidJSON(t *testing.T) {
+	old := engine
+	engine = &inspectionEngine{workers: defaultWorkers}
+	t.Cleanup(func() { engine = old })
+
+	resp := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodPost,
+		Path:   "/v0/management/plugins/grok-inspection/start",
+		Body:   []byte(`{"workers":`), // truncated JSON
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, string(resp.Body))
+	}
+	if !strings.Contains(string(resp.Body), T(LangZH, "invalid_json")) {
+		t.Fatalf("body=%s", string(resp.Body))
+	}
+	// Must not have started inspection.
+	if engine.running {
+		t.Fatal("invalid JSON must not start inspection")
+	}
+
+	// Best-effort English when lang is visible in malformed body.
+	respEN := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodPost,
+		Path:   "/v0/management/plugins/grok-inspection/start",
+		Body:   []byte(`{"lang":"en","workers":`),
+	})
+	if respEN.StatusCode != http.StatusBadRequest {
+		t.Fatalf("en status=%d body=%s", respEN.StatusCode, string(respEN.Body))
+	}
+	if !strings.Contains(string(respEN.Body), T(LangEN, "invalid_json")) {
+		t.Fatalf("en body=%s", string(respEN.Body))
+	}
+}
+
+func TestApplyActionValidationLocalizedAndStableStatus(t *testing.T) {
+	old := engine
+	engine = &inspectionEngine{workers: defaultWorkers, results: nil}
+	t.Cleanup(func() { engine = old })
+
+	cases := []struct {
+		name   string
+		path   string
+		body   string
+		status int
+		zhKey  string
+	}{
+		{
+			name: "force invalid", path: "/v0/management/plugins/grok-inspection/apply",
+			body: `{"lang":"zh","force_action":"nope","auth_indexes":["a"]}`, status: http.StatusBadRequest, zhKey: "force_action_invalid",
+		},
+		{
+			name: "force missing targets", path: "/v0/management/plugins/grok-inspection/apply",
+			body: `{"lang":"en","force_action":"disable"}`, status: http.StatusBadRequest, zhKey: "force_action_requires_targets",
+		},
+		{
+			name: "force no match", path: "/v0/management/plugins/grok-inspection/apply",
+			body: `{"lang":"zh","force_action":"disable","auth_indexes":["missing"]}`, status: http.StatusBadRequest, zhKey: "no_accounts_matched",
+		},
+		{
+			name: "no recommended", path: "/v0/management/plugins/grok-inspection/apply",
+			body: `{"lang":"en"}`, status: http.StatusConflict, zhKey: "no_recommended_actions",
+		},
+		{
+			name: "action missing name", path: "/v0/management/plugins/grok-inspection/action",
+			body: `{"lang":"zh","disabled":true}`, status: http.StatusBadRequest, zhKey: "name_or_auth_required",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := dispatchManagement(pluginapi.ManagementRequest{
+				Method: http.MethodPost,
+				Path:   tc.path,
+				Body:   []byte(tc.body),
+			})
+			if resp.StatusCode != tc.status {
+				t.Fatalf("status=%d want %d body=%s", resp.StatusCode, tc.status, string(resp.Body))
+			}
+			// Determine expected language from body.
+			lang := LangZH
+			if strings.Contains(tc.body, `"lang":"en"`) {
+				lang = LangEN
+			}
+			want := T(lang, tc.zhKey)
+			if !strings.Contains(string(resp.Body), want) {
+				t.Fatalf("body=%s want substring %q", string(resp.Body), want)
+			}
+			// Opposite language must differ for bilingual keys.
+			other := LangEN
+			if lang == LangEN {
+				other = LangZH
+			}
+			if T(lang, tc.zhKey) == T(other, tc.zhKey) {
+				t.Fatalf("zh/en messages identical for %s", tc.zhKey)
+			}
+		})
+	}
+
+	// Same validation codes with flipped languages.
+	for _, lang := range []string{"zh", "en"} {
+		resp := dispatchManagement(pluginapi.ManagementRequest{
+			Method: http.MethodPost,
+			Path:   "/v0/management/plugins/grok-inspection/apply",
+			Body:   []byte(`{"lang":"` + lang + `","force_action":"bad","auth_indexes":["x"]}`),
+		})
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("lang=%s status=%d", lang, resp.StatusCode)
+		}
+		if !strings.Contains(string(resp.Body), T(normalizeLang(lang), "force_action_invalid")) {
+			t.Fatalf("lang=%s body=%s", lang, string(resp.Body))
+		}
+	}
+}
+
+func TestUIAriaLabelAndWorkersTitleI18n(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	if !strings.Contains(page, `data-i18n-aria-label="tabs_aria"`) {
+		t.Fatal("tabs must use data-i18n-aria-label")
+	}
+	if !strings.Contains(page, `data-i18n-title="workers_title"`) {
+		t.Fatal("workers input missing data-i18n-title")
+	}
+	if !strings.Contains(page, "workers_title:") {
+		t.Fatal("workers_title key missing from I18N")
+	}
+	if !strings.Contains(page, "[data-i18n-aria-label]") {
+		t.Fatal("applyStaticI18n must process data-i18n-aria-label")
+	}
+	// ensure handler sets aria-label attribute
+	if !strings.Contains(page, "el.setAttribute('aria-label', t(key));") {
+		t.Fatal("aria-label setter missing")
+	}
+	if !strings.Contains(page, "apply_progress_sep:") {
+		t.Fatal("apply_progress_sep key missing")
+	}
+	if !strings.Contains(page, "t('apply_progress_sep')") {
+		t.Fatal("apply progress must use I18N separator, not hard-coded fullwidth colon")
+	}
+	// Hard-coded fullwidth colon glued to apply_current should be gone.
+	if strings.Contains(page, "apply_current ? '：'") {
+		t.Fatal("hard-coded fullwidth colon still present in apply progress")
+	}
+}
+
+func TestApplyInvalidJSONUsesI18n(t *testing.T) {
+	resp := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodPost,
+		Path:   "/v0/management/plugins/grok-inspection/apply",
+		Body:   []byte(`{"lang":"en",`),
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, string(resp.Body))
+	}
+	if !strings.Contains(string(resp.Body), T(LangEN, "invalid_json")) {
+		t.Fatalf("body=%s", string(resp.Body))
+	}
+}

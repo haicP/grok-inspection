@@ -143,4 +143,3 @@ Source layout: engine.go (job lifecycle), probe.go (HTTP probe), identity.go (ac
 - Runtime operator-facing reasons/errors are localized in `i18n.go` via `T(lang, key, ...)`.
 - `/start` accepts `lang` (`zh`|`en`) so probe reasons match the selected UI language.
 - Machine classification keys (`healthy`, `quota_exhausted`, …) stay stable; only human-readable text is localized.
-

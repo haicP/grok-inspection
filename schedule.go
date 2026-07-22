@@ -139,8 +139,14 @@ func persistScheduleStateLocked(cfg pluginConfig) {
 	if err != nil {
 		return
 	}
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
-		slog.Warn("grok-inspection: schedule state save failed", "path", path, "error", err)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+		slog.Warn("grok-inspection: schedule state save failed", "path", tmp, "error", err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		slog.Warn("grok-inspection: schedule state rename failed", "path", path, "error", err)
 	}
 }
 
@@ -235,7 +241,7 @@ func applyScheduleSettingsChange(prev pluginConfig, cfg pluginConfig) {
 	if !cfg.ScheduleEnabled {
 		scheduleState.nextAt = time.Time{}
 		persistScheduleStateLocked(cfg)
-		wakeScheduleLoop()
+		// No wake: timer is idle until next config/enable.
 		return
 	}
 
@@ -246,10 +252,10 @@ func applyScheduleSettingsChange(prev pluginConfig, cfg pluginConfig) {
 	enabledNow := !prev.ScheduleEnabled && cfg.ScheduleEnabled
 	intervalChanged := prev.ScheduleEnabled && prev.ScheduleIntervalMinutes != cfg.ScheduleIntervalMinutes
 	if enabledNow || intervalChanged || scheduleState.nextAt.IsZero() {
+		// Always schedule into the future; ticker will fire without an immediate wake.
 		scheduleState.nextAt = now.Add(time.Duration(mins) * time.Minute)
 		persistScheduleStateLocked(cfg)
 	}
-	wakeScheduleLoop()
 }
 
 func scheduleStatus() scheduleSnapshot {

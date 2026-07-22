@@ -642,6 +642,11 @@ func renderUIPage(pluginID string) []byte {
       schedule_status_running:'执行中',
       schedule_interval_invalid:'间隔必须是 5–1440 的整数分钟',
       schedule_saved:'定时设置已保存',
+      schedule_due_soon:'即将执行',
+      schedule_in_prefix:'约 ',
+      schedule_unit_h:'小时',
+      schedule_unit_m:'分',
+      schedule_unit_s:'秒',
 
       title:'Grok 账号巡检',
       subtitle:'「开始巡检」清空并重测全部；「增量巡检」只测新增账号；「巡检当前分类」只重测所选分类（需先点分类卡片）；「批量操作」只作用于当前筛选；结果会自动保存。',
@@ -775,6 +780,11 @@ func renderUIPage(pluginID string) []byte {
       schedule_status_running:'Running',
       schedule_interval_invalid:'Interval must be an integer from 5 to 1440 minutes',
       schedule_saved:'Schedule settings saved',
+      schedule_due_soon:'due soon',
+      schedule_in_prefix:'in ',
+      schedule_unit_h:'h ',
+      schedule_unit_m:'m ',
+      schedule_unit_s:'s',
 
       title:'Grok Account Inspection',
       subtitle:'"Start inspection" clears and rechecks all accounts; "Incremental inspection" only checks newly added accounts; "Inspect current category" only rechecks the selected category (click a category card first); bulk actions apply only to the current filter; results are saved automatically.',
@@ -2139,6 +2149,8 @@ func renderUIPage(pluginID string) []byte {
       fullResultsSyncing = false;
     }
   }
+  // Schedule times are server-authored (RFC3339). Display uses the ISO moment only;
+  // remaining countdown is next_at - server_now so browser clock drift cannot shift the plan.
   function formatScheduleTime(iso) {
     if (!iso) return '';
     try {
@@ -2146,6 +2158,21 @@ func renderUIPage(pluginID string) []byte {
       if (Number.isNaN(d.getTime())) return String(iso);
       return d.toLocaleString();
     } catch (_) { return String(iso); }
+  }
+  function formatScheduleRemain(nextIso, serverNowIso) {
+    if (!nextIso || !serverNowIso) return '';
+    const next = new Date(nextIso).getTime();
+    const now = new Date(serverNowIso).getTime();
+    if (!Number.isFinite(next) || !Number.isFinite(now)) return '';
+    let sec = Math.floor((next - now) / 1000);
+    if (sec <= 0) return t('schedule_due_soon');
+    const h = Math.floor(sec / 3600);
+    sec %%= 3600;
+    const m = Math.floor(sec / 60);
+    const s = sec %% 60;
+    if (h > 0) return t('schedule_in_prefix') + h + t('schedule_unit_h') + m + t('schedule_unit_m');
+    if (m > 0) return t('schedule_in_prefix') + m + t('schedule_unit_m') + s + t('schedule_unit_s');
+    return t('schedule_in_prefix') + s + t('schedule_unit_s');
   }
   function scheduleStatusLabel(s) {
     const st = String((s && s.last_status) || '');
@@ -2173,7 +2200,12 @@ func renderUIPage(pluginID string) []byte {
     }
     if (textEl) {
       const parts = [];
-      if (s.next_at) parts.push(t('schedule_next_prefix') + formatScheduleTime(s.next_at));
+      if (s.next_at) {
+        let nextLine = t('schedule_next_prefix') + formatScheduleTime(s.next_at);
+        const remain = formatScheduleRemain(s.next_at, s.server_now);
+        if (remain) nextLine += ' (' + remain + ')';
+        parts.push(nextLine);
+      }
       const lastLabel = scheduleStatusLabel(s);
       if (s.last_finished_at || lastLabel) {
         let last = t('schedule_last_prefix');

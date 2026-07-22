@@ -251,8 +251,10 @@ func updateAutobanSettings(enabled *bool, fallbackHours *int) (pluginConfig, err
 }
 
 // updateScheduleSettings applies scheduled-inspection toggle / interval and persists.
+// Only operator-driven changes may reset next_at (via applyScheduleSettingsChange).
 func updateScheduleSettings(enabled *bool, intervalMinutes *int) (pluginConfig, error) {
-	cfg := loadedConfig()
+	prev := loadedConfig()
+	cfg := prev
 	if enabled != nil {
 		cfg.ScheduleEnabled = *enabled
 	}
@@ -267,7 +269,7 @@ func updateScheduleSettings(enabled *bool, intervalMinutes *int) (pluginConfig, 
 		return cfg, err
 	}
 	currentConfig.Store(cfg)
-	notifyScheduleConfigChanged()
+	applyScheduleSettingsChange(prev, cfg)
 	return cfg, nil
 }
 
@@ -286,8 +288,10 @@ func configure(raw []byte) error {
 	cfg = applyRuntimeSettings(cfg)
 	currentConfig.Store(cfg)
 	loadBanState(cfg)
+	// Start/restore background schedule from durable server state.
+	// Do not reschedule on every reconfigure — that would slide next_at on page open.
 	startScheduleLoop()
-	notifyScheduleConfigChanged()
+	ensureScheduleRuntime(time.Now())
 	return nil
 }
 

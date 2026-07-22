@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -21,14 +24,16 @@ const (
 var schedulePollInterval = time.Second
 
 type scheduleSnapshot struct {
-	Enabled         bool   `json:"enabled"`
-	IntervalMinutes int    `json:"interval_minutes"`
-	NextAt          string `json:"next_at,omitempty"`
-	LastStartedAt   string `json:"last_started_at,omitempty"`
-	LastFinishedAt  string `json:"last_finished_at,omitempty"`
-	LastStatus      string `json:"last_status,omitempty"`
-	LastError       string `json:"last_error,omitempty"`
-	InProgress      bool   `json:"in_progress,omitempty"`
+	Enabled         bool `json:"enabled"`
+	IntervalMinutes int  `json:"interval_minutes"`
+	// ServerNow is the plugin host clock (RFC3339); clients should not use browser time for countdown.
+	ServerNow      string `json:"server_now"`
+	NextAt         string `json:"next_at,omitempty"`
+	LastStartedAt  string `json:"last_started_at,omitempty"`
+	LastFinishedAt string `json:"last_finished_at,omitempty"`
+	LastStatus     string `json:"last_status,omitempty"`
+	LastError      string `json:"last_error,omitempty"`
+	InProgress     bool   `json:"in_progress,omitempty"`
 }
 
 type scheduleRuntime struct {
@@ -39,6 +44,16 @@ type scheduleRuntime struct {
 	lastStatus   string
 	lastError    string
 	inProgress   bool
+	loaded       bool
+}
+
+// schedulePersisted is durable server-side schedule bookkeeping (not browser-local).
+type schedulePersisted struct {
+	NextAt         string `json:"next_at,omitempty"`
+	LastStartedAt  string `json:"last_started_at,omitempty"`
+	LastFinishedAt string `json:"last_finished_at,omitempty"`
+	LastStatus     string `json:"last_status,omitempty"`
+	LastError      string `json:"last_error,omitempty"`
 }
 
 var (
@@ -51,13 +66,125 @@ var (
 	scheduleWake   chan struct{}
 )
 
+func scheduleStateFile(cfg pluginConfig) string {
+	if strings.TrimSpace(cfg.StateFile) != "" {
+		return filepath.Join(filepath.Dir(cfg.StateFile), "schedule.json")
+	}
+	if dir := strings.TrimSpace(os.Getenv("GROK_INSPECTION_DATA_DIR")); dir != "" {
+		return filepath.Join(dir, "schedule.json")
+	}
+	return filepath.Join("data", "grok-inspection", "schedule.json")
+}
+
+func parseRFC3339(s string) time.Time {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			return time.Time{}
+		}
+	}
+	return t
+}
+
+func formatRFC3339(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func loadScheduleStateLocked(cfg pluginConfig) {
+	if scheduleState.loaded {
+		return
+	}
+	scheduleState.loaded = true
+	path := scheduleStateFile(cfg)
+	raw, err := os.ReadFile(path)
+	if err != nil || len(raw) == 0 {
+		return
+	}
+	var p schedulePersisted
+	if json.Unmarshal(raw, &p) != nil {
+		return
+	}
+	scheduleState.nextAt = parseRFC3339(p.NextAt)
+	scheduleState.lastStarted = parseRFC3339(p.LastStartedAt)
+	scheduleState.lastFinished = parseRFC3339(p.LastFinishedAt)
+	scheduleState.lastStatus = strings.TrimSpace(p.LastStatus)
+	scheduleState.lastError = strings.TrimSpace(p.LastError)
+}
+
+func persistScheduleStateLocked(cfg pluginConfig) {
+	path := scheduleStateFile(cfg)
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		slog.Warn("grok-inspection: schedule state mkdir failed", "path", path, "error", err)
+		return
+	}
+	payload := schedulePersisted{
+		NextAt:         formatRFC3339(scheduleState.nextAt),
+		LastStartedAt:  formatRFC3339(scheduleState.lastStarted),
+		LastFinishedAt: formatRFC3339(scheduleState.lastFinished),
+		LastStatus:     scheduleState.lastStatus,
+		LastError:      scheduleState.lastError,
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		slog.Warn("grok-inspection: schedule state save failed", "path", path, "error", err)
+	}
+}
+
+func wakeScheduleLoop() {
+	if scheduleWake == nil {
+		return
+	}
+	select {
+	case scheduleWake <- struct{}{}:
+	default:
+	}
+}
+
+// ensureScheduleRuntime loads durable state once and seeds next_at only when missing.
+// Does NOT reset an existing future next_at (plugin.reconfigure / page open must not slide the timer).
+func ensureScheduleRuntime(now time.Time) {
+	cfg := loadedConfig()
+	scheduleState.mu.Lock()
+	defer scheduleState.mu.Unlock()
+	loadScheduleStateLocked(cfg)
+	if !cfg.ScheduleEnabled {
+		if !scheduleState.nextAt.IsZero() {
+			scheduleState.nextAt = time.Time{}
+			persistScheduleStateLocked(cfg)
+		}
+		return
+	}
+	mins := cfg.ScheduleIntervalMinutes
+	if mins <= 0 {
+		mins = defaultScheduleIntervalMinutes
+	}
+	// First enable / empty state: schedule once from server clock.
+	if scheduleState.nextAt.IsZero() {
+		scheduleState.nextAt = now.Add(time.Duration(mins) * time.Minute)
+		persistScheduleStateLocked(cfg)
+	}
+}
+
 func startScheduleLoop() {
 	scheduleOnce.Do(func() {
 		scheduleStop = make(chan struct{})
 		scheduleDone = make(chan struct{})
 		scheduleWake = make(chan struct{}, 1)
-		// Seed next fire from current config (enabled → now+interval; disabled → zero).
-		rescheduleNextFire(time.Now())
+		ensureScheduleRuntime(time.Now())
 		go func() {
 			defer close(scheduleDone)
 			ticker := time.NewTicker(schedulePollInterval)
@@ -69,7 +196,6 @@ func startScheduleLoop() {
 				case <-ticker.C:
 					maybeRunSchedule(time.Now())
 				case <-scheduleWake:
-					// Config changed; next tick (or immediate maybe) uses new nextAt.
 					maybeRunSchedule(time.Now())
 				}
 			}
@@ -85,7 +211,6 @@ func stopScheduleLoop() {
 	}
 	select {
 	case <-scheduleStop:
-		// already closed
 	default:
 		close(scheduleStop)
 	}
@@ -93,43 +218,50 @@ func stopScheduleLoop() {
 	scheduleStop = nil
 	scheduleDone = nil
 	scheduleWake = nil
-	// Allow tests to restart the loop after shutdown.
 	scheduleOnce = sync.Once{}
+	scheduleState.mu.Lock()
+	scheduleState.loaded = false
+	scheduleState.mu.Unlock()
 }
 
-func notifyScheduleConfigChanged() {
-	rescheduleNextFire(time.Now())
-	if scheduleWake == nil {
-		return
-	}
-	select {
-	case scheduleWake <- struct{}{}:
-	default:
-	}
-}
-
-func rescheduleNextFire(now time.Time) {
-	cfg := loadedConfig()
+// applyScheduleSettingsChange updates next_at only when the operator changes
+// enable/interval. Background reconfigure must not call this.
+func applyScheduleSettingsChange(prev pluginConfig, cfg pluginConfig) {
+	now := time.Now()
 	scheduleState.mu.Lock()
 	defer scheduleState.mu.Unlock()
+	loadScheduleStateLocked(cfg)
+
 	if !cfg.ScheduleEnabled {
 		scheduleState.nextAt = time.Time{}
+		persistScheduleStateLocked(cfg)
+		wakeScheduleLoop()
 		return
 	}
+
 	mins := cfg.ScheduleIntervalMinutes
 	if mins <= 0 {
 		mins = defaultScheduleIntervalMinutes
 	}
-	scheduleState.nextAt = now.Add(time.Duration(mins) * time.Minute)
+	enabledNow := !prev.ScheduleEnabled && cfg.ScheduleEnabled
+	intervalChanged := prev.ScheduleEnabled && prev.ScheduleIntervalMinutes != cfg.ScheduleIntervalMinutes
+	if enabledNow || intervalChanged || scheduleState.nextAt.IsZero() {
+		scheduleState.nextAt = now.Add(time.Duration(mins) * time.Minute)
+		persistScheduleStateLocked(cfg)
+	}
+	wakeScheduleLoop()
 }
 
 func scheduleStatus() scheduleSnapshot {
 	cfg := loadedConfig()
+	now := time.Now().UTC()
 	scheduleState.mu.Lock()
 	defer scheduleState.mu.Unlock()
+	loadScheduleStateLocked(cfg)
 	snap := scheduleSnapshot{
 		Enabled:         cfg.ScheduleEnabled,
 		IntervalMinutes: cfg.ScheduleIntervalMinutes,
+		ServerNow:       now.Format(time.RFC3339),
 		LastStatus:      scheduleState.lastStatus,
 		LastError:       scheduleState.lastError,
 		InProgress:      scheduleState.inProgress,
@@ -138,23 +270,25 @@ func scheduleStatus() scheduleSnapshot {
 		snap.IntervalMinutes = defaultScheduleIntervalMinutes
 	}
 	if !scheduleState.nextAt.IsZero() {
-		snap.NextAt = scheduleState.nextAt.Format(time.RFC3339)
+		snap.NextAt = scheduleState.nextAt.UTC().Format(time.RFC3339)
 	}
 	if !scheduleState.lastStarted.IsZero() {
-		snap.LastStartedAt = scheduleState.lastStarted.Format(time.RFC3339)
+		snap.LastStartedAt = scheduleState.lastStarted.UTC().Format(time.RFC3339)
 	}
 	if !scheduleState.lastFinished.IsZero() {
-		snap.LastFinishedAt = scheduleState.lastFinished.Format(time.RFC3339)
+		snap.LastFinishedAt = scheduleState.lastFinished.UTC().Format(time.RFC3339)
 	}
 	return snap
 }
 
 func setScheduleOutcome(status, errMsg string) {
+	cfg := loadedConfig()
 	scheduleState.mu.Lock()
 	defer scheduleState.mu.Unlock()
 	scheduleState.lastStatus = status
 	scheduleState.lastError = errMsg
 	scheduleState.lastFinished = time.Now()
+	persistScheduleStateLocked(cfg)
 }
 
 func maybeRunSchedule(now time.Time) {
@@ -164,11 +298,23 @@ func maybeRunSchedule(now time.Time) {
 	}
 
 	scheduleState.mu.Lock()
+	loadScheduleStateLocked(cfg)
 	if scheduleState.inProgress {
 		scheduleState.mu.Unlock()
 		return
 	}
-	if scheduleState.nextAt.IsZero() || now.Before(scheduleState.nextAt) {
+	if scheduleState.nextAt.IsZero() {
+		// Enabled but no next yet (should be rare after ensureScheduleRuntime).
+		mins := cfg.ScheduleIntervalMinutes
+		if mins <= 0 {
+			mins = defaultScheduleIntervalMinutes
+		}
+		scheduleState.nextAt = now.Add(time.Duration(mins) * time.Minute)
+		persistScheduleStateLocked(cfg)
+		scheduleState.mu.Unlock()
+		return
+	}
+	if now.Before(scheduleState.nextAt) {
 		scheduleState.mu.Unlock()
 		return
 	}
@@ -182,6 +328,7 @@ func maybeRunSchedule(now time.Time) {
 	scheduleState.lastStarted = now
 	scheduleState.lastStatus = ""
 	scheduleState.lastError = ""
+	persistScheduleStateLocked(cfg)
 	scheduleState.mu.Unlock()
 
 	defer func() {
@@ -190,6 +337,7 @@ func maybeRunSchedule(now time.Time) {
 		if scheduleState.lastFinished.IsZero() || scheduleState.lastFinished.Before(scheduleState.lastStarted) {
 			scheduleState.lastFinished = time.Now()
 		}
+		persistScheduleStateLocked(loadedConfig())
 		scheduleState.mu.Unlock()
 	}()
 
@@ -316,7 +464,6 @@ func isScheduleBusyError(err error) bool {
 			return true
 		}
 	}
-	// Typed conflict status without relying on language.
 	var he *httpStatusError
 	if errors.As(err, &he) && he != nil && he.status == 409 {
 		return true

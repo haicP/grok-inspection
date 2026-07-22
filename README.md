@@ -30,6 +30,7 @@ English docs: [README.en.md](README.en.md).
 - 巡检结果落盘，页面重新打开后可恢复
 - 支持导出当前筛选结果为 JSON/TXT
 - 实时自动禁用（默认开启）：额度用尽 24h 后自动恢复；403/401 需手动解禁
+- 定时巡检（默认关闭）：可按间隔（默认 30 分钟，5–1440）全量巡检（不含已禁用，并发 16），结束后自动执行建议操作；需进程环境变量 `MANAGEMENT_PASSWORD` 或 `CPA_MANAGEMENT_KEY` 以支持自动删除
 
 ## 安装
 
@@ -113,6 +114,7 @@ CPA_MANAGEMENT_BASE_URL=http://127.0.0.1:<实际端口>
 - 巡检结果会保存在 CPA 工作目录下的 `data/grok-inspection/results.json`
 - 结果文件只保存展示所需信息，不保存完整 token
 - 实时自动禁用默认开启：命中 free-usage-exhausted / permission-denied / 401 时会自动禁用；可在「实时自动禁用」页关闭。巡检页的建议操作仍需确认后执行
+- 定时巡检默认关闭，可在巡检页开启并设置间隔；到点后自动全量巡检并执行建议操作（与手动「执行建议操作」一致，含删除）。自动删除依赖 CPA 管理密钥环境变量
 - 删除操作会删除对应 Auth 凭证，恢复需要重新登录
 
 ## License

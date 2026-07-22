@@ -1,0 +1,71 @@
+name: Build Linux SO
+
+# 在 GitHub 原生 Linux runner 上编译 CGO 插件 .so（本机 macOS 无法直接交叉编译）
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-linux-so-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux-so:
+    name: Linux ${{ matrix.goarch }} (.so)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            runner: ubuntu-latest
+          - goarch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.22.x"
+          cache: false
+
+      - name: Install C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Test
+        run: go test ./... -count=1
+
+      - name: Build c-shared plugin
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          mkdir -p dist
+          go build \
+            -buildvcs=false \
+            -buildmode=c-shared \
+            -o "dist/grok-inspection.so" \
+            .
+          ls -la dist
+          file dist/grok-inspection.so
+          go version -m dist/grok-inspection.so | tee dist/build-info.txt
+          grep -q "GOOS=linux" dist/build-info.txt
+          grep -q "GOARCH=${{ matrix.goarch }}" dist/build-info.txt
+
+      - name: Upload .so artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: grok-inspection-linux-${{ matrix.goarch }}
+          path: |
+            dist/grok-inspection.so
+            dist/build-info.txt
+          if-no-files-found: error
+          retention-days: 30

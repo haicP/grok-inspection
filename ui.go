@@ -496,6 +496,24 @@ func renderUIPage(pluginID string) []byte {
 
     </div>
     <section class="panel active" id="panel-inspect">
+    <div class="module-bar" id="scheduleBar" style="margin-bottom:10px">
+      <div>
+        <h2 data-i18n="schedule_title" style="font-size:14px;margin:0">定时巡检</h2>
+        <div class="hint" id="scheduleHint" data-i18n="schedule_hint">全量 · 不含已禁用 · 并发 16 · 结束后自动执行建议操作</div>
+      </div>
+      <div class="switch-row" style="flex-wrap:wrap;gap:10px;align-items:center">
+        <label class="switch" data-i18n-title="schedule_enable" title="开启后按间隔自动全量巡检">
+          <input id="scheduleEnabledToggle" type="checkbox">
+          <span class="slider"></span>
+        </label>
+        <span id="scheduleEnabledPill" class="status-pill off" data-i18n="schedule_off">已关闭</span>
+        <label class="ctl"><span data-i18n="schedule_interval">间隔(分钟)</span>
+          <input id="scheduleInterval" type="number" min="5" max="1440" step="1" value="30" style="width:72px">
+        </label>
+        <button id="scheduleSaveBtn" class="soft" type="button" data-i18n="schedule_save">保存间隔</button>
+        <span class="hint" id="scheduleStatusText"></span>
+      </div>
+    </div>
     <div class="controls">
       <label class="ctl"><span data-i18n="workers">并发</span> <input id="workers" type="number" min="1" max="16" step="1" value="6" data-i18n-title="workers_title" title="1-16 的整数"></label>
       <label class="ctl"><input id="includeDisabled" type="checkbox"> <span data-i18n="include_disabled">包含已禁用</span></label>
@@ -609,6 +627,21 @@ func renderUIPage(pluginID string) []byte {
       ban_empty:'当前没有自动禁用中的账号',
       ban_unban:'解禁',
       ban_status_loading:'加载中…',
+      schedule_title:'定时巡检',
+      schedule_hint:'全量 · 不含已禁用 · 并发 16 · 结束后自动执行建议操作',
+      schedule_enable:'开启后按间隔自动全量巡检',
+      schedule_on:'已开启', schedule_off:'已关闭',
+      schedule_interval:'间隔(分钟)',
+      schedule_save:'保存间隔',
+      schedule_next_prefix:'下次 ',
+      schedule_last_prefix:'上次 ',
+      schedule_status_ok:'成功',
+      schedule_status_skipped_busy:'跳过(忙碌)',
+      schedule_status_cancelled:'已取消',
+      schedule_status_error:'失败',
+      schedule_status_running:'执行中',
+      schedule_interval_invalid:'间隔必须是 5–1440 的整数分钟',
+      schedule_saved:'定时设置已保存',
 
       title:'Grok 账号巡检',
       subtitle:'「开始巡检」清空并重测全部；「增量巡检」只测新增账号；「巡检当前分类」只重测所选分类（需先点分类卡片）；「批量操作」只作用于当前筛选；结果会自动保存。',
@@ -727,6 +760,21 @@ func renderUIPage(pluginID string) []byte {
       ban_empty:'No accounts are currently auto-banned',
       ban_unban:'Unban',
       ban_status_loading:'Loading…',
+      schedule_title:'Scheduled inspection',
+      schedule_hint:'Full scan · exclude disabled · 16 workers · auto-apply suggestions',
+      schedule_enable:'When on, run full inspection on an interval',
+      schedule_on:'On', schedule_off:'Off',
+      schedule_interval:'Interval (min)',
+      schedule_save:'Save interval',
+      schedule_next_prefix:'Next ',
+      schedule_last_prefix:'Last ',
+      schedule_status_ok:'OK',
+      schedule_status_skipped_busy:'Skipped (busy)',
+      schedule_status_cancelled:'Cancelled',
+      schedule_status_error:'Error',
+      schedule_status_running:'Running',
+      schedule_interval_invalid:'Interval must be an integer from 5 to 1440 minutes',
+      schedule_saved:'Schedule settings saved',
 
       title:'Grok Account Inspection',
       subtitle:'"Start inspection" clears and rechecks all accounts; "Incremental inspection" only checks newly added accounts; "Inspect current category" only rechecks the selected category (click a category card first); bulk actions apply only to the current filter; results are saved automatically.',
@@ -2091,7 +2139,92 @@ func renderUIPage(pluginID string) []byte {
       fullResultsSyncing = false;
     }
   }
-  async function refresh(opts) {
+  function formatScheduleTime(iso) {
+    if (!iso) return '';
+    try {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso);
+      return d.toLocaleString();
+    } catch (_) { return String(iso); }
+  }
+  function scheduleStatusLabel(s) {
+    const st = String((s && s.last_status) || '');
+    if (s && s.in_progress) return t('schedule_status_running');
+    if (st === 'ok') return t('schedule_status_ok');
+    if (st === 'skipped_busy') return t('schedule_status_skipped_busy');
+    if (st === 'cancelled') return t('schedule_status_cancelled');
+    if (st === 'error') return t('schedule_status_error');
+    return st || '';
+  }
+  function renderScheduleStatus(snap) {
+    const s = (snap && snap.schedule) || {};
+    const toggle = document.getElementById('scheduleEnabledToggle');
+    const pill = document.getElementById('scheduleEnabledPill');
+    const interval = document.getElementById('scheduleInterval');
+    const textEl = document.getElementById('scheduleStatusText');
+    const enabled = !!s.enabled;
+    if (toggle && document.activeElement !== toggle) toggle.checked = enabled;
+    if (pill) {
+      pill.textContent = enabled ? t('schedule_on') : t('schedule_off');
+      pill.className = 'status-pill ' + (enabled ? 'on' : 'off');
+    }
+    if (interval && document.activeElement !== interval && s.interval_minutes) {
+      interval.value = String(s.interval_minutes);
+    }
+    if (textEl) {
+      const parts = [];
+      if (s.next_at) parts.push(t('schedule_next_prefix') + formatScheduleTime(s.next_at));
+      const lastLabel = scheduleStatusLabel(s);
+      if (s.last_finished_at || lastLabel) {
+        let last = t('schedule_last_prefix');
+        if (s.last_finished_at) last += formatScheduleTime(s.last_finished_at);
+        if (lastLabel) last += (s.last_finished_at ? ' · ' : '') + lastLabel;
+        if (s.last_error) last += ' · ' + s.last_error;
+        parts.push(last);
+      }
+      textEl.textContent = parts.join(' · ');
+    }
+  }
+  async function setScheduleEnabled(on) {
+    const toggle = document.getElementById('scheduleEnabledToggle');
+    if (toggle) toggle.disabled = true;
+    try {
+      const data = await api('/schedule-settings', { method: 'POST', body: JSON.stringify({ enabled: !!on }) });
+      if (data && data.schedule) renderScheduleStatus({ schedule: data.schedule });
+      else renderScheduleStatus({ schedule: { enabled: !!(data && data.enabled), interval_minutes: data && data.interval_minutes } });
+      showOk(t('schedule_saved'));
+    } catch (e) {
+      showErr(String(e.message || e));
+      if (toggle) toggle.checked = !on;
+    } finally {
+      if (toggle) toggle.disabled = false;
+    }
+  }
+  async function saveScheduleInterval() {
+    const input = document.getElementById('scheduleInterval');
+    const raw = String(input && input.value != null ? input.value : '').trim();
+    if (!/^\d+$/.test(raw)) {
+      showErr(t('schedule_interval_invalid'));
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 5 || n > 1440) {
+      showErr(t('schedule_interval_invalid'));
+      return;
+    }
+    const btn = document.getElementById('scheduleSaveBtn');
+    if (btn) btn.disabled = true;
+    try {
+      const data = await api('/schedule-settings', { method: 'POST', body: JSON.stringify({ interval_minutes: n }) });
+      if (data && data.schedule) renderScheduleStatus({ schedule: data.schedule });
+      showOk(t('schedule_saved'));
+    } catch (e) {
+      showErr(String(e.message || e));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+    async function refresh(opts) {
     const light = !!(opts && opts.light);
     if (!keyInput.value.trim()) {
       stopPolling();
@@ -2115,6 +2248,7 @@ func renderUIPage(pluginID string) []byte {
         if (data && data.results_gen != null) lastResultsGen = Number(data.results_gen) || 0;
         lastFullResultsAt = Date.now();
       }
+      try { renderScheduleStatus(data || state.snapshot || {}); } catch (_) {}
 
       if (data && data.running) {
         $('includeDisabled').checked = !!data.include_disabled;
@@ -2567,6 +2701,12 @@ async function setAutobanEnabled(on) {
       if (toggle) toggle.disabled = false;
     }
   }
+  const scheduleEnabledToggle = document.getElementById('scheduleEnabledToggle');
+  if (scheduleEnabledToggle) {
+    scheduleEnabledToggle.onchange = () => setScheduleEnabled(!!scheduleEnabledToggle.checked);
+  }
+  const scheduleSaveBtn = document.getElementById('scheduleSaveBtn');
+  if (scheduleSaveBtn) scheduleSaveBtn.onclick = () => saveScheduleInterval();
   const banEnabledToggle = document.getElementById('banEnabledToggle');
   if (banEnabledToggle) {
     banEnabledToggle.onchange = () => setAutobanEnabled(!!banEnabledToggle.checked);

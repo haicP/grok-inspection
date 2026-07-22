@@ -89,6 +89,8 @@ type jobSnapshot struct {
 	// PersistError is the last results.json save failure, if any.
 	PersistError string         `json:"persist_error,omitempty"`
 	Unban        map[string]any `json:"unban,omitempty"`
+	// Schedule is the scheduled full-inspection timer status (always present).
+	Schedule scheduleSnapshot `json:"schedule"`
 }
 
 // httpStatusError pairs a stable HTTP status with a localized operator message.
@@ -462,6 +464,7 @@ func (e *inspectionEngine) snapshotLocked(includeResults bool) jobSnapshot {
 		IncludeResults:   includeResults,
 		PersistError:     e.persistError,
 		Unban:            unbanJobStatus(),
+		Schedule:         scheduleStatus(),
 	}
 	if includeResults {
 		snap.Results = append([]accountResult(nil), e.results...)
@@ -705,6 +708,37 @@ func (e *inspectionEngine) shutdown() {
 	e.mu.Lock()
 	e.applyDraining = false
 	e.mu.Unlock()
+}
+
+func (e *inspectionEngine) busyForSchedule() bool {
+	e.mu.Lock()
+	busy := e.running || e.applying || e.applyDraining || e.actionInFlight > 0
+	e.mu.Unlock()
+	if busy {
+		return true
+	}
+	unbanJob.mu.Lock()
+	unbanBusy := unbanJob.running
+	unbanJob.mu.Unlock()
+	return unbanBusy
+}
+
+func (e *inspectionEngine) inspectionActive() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.running
+}
+
+func (e *inspectionEngine) applyActive() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.applying || e.applyDraining
+}
+
+func (e *inspectionEngine) lastRunWasStopped() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.stopped && !e.running
 }
 
 func (e *inspectionEngine) isStopped(runID uint64) bool {

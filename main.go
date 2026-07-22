@@ -65,6 +65,8 @@ func pluginRegistration() registration {
 				{Name: "persist_state", Type: pluginapi.ConfigFieldTypeBoolean, Description: T(LangZH, "cfg_persist_state")},
 				{Name: "state_file", Type: pluginapi.ConfigFieldTypeString, Description: T(LangZH, "cfg_state_file")},
 				{Name: "log_matches", Type: pluginapi.ConfigFieldTypeBoolean, Description: T(LangZH, "cfg_log_matches")},
+				{Name: "schedule_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: T(LangZH, "cfg_schedule_enabled")},
+				{Name: "schedule_interval_minutes", Type: pluginapi.ConfigFieldTypeInteger, Description: T(LangZH, "cfg_schedule_interval_minutes")},
 			},
 		},
 		Capabilities: registrationCapabilities{
@@ -87,6 +89,7 @@ func managementRegistration() pluginapi.ManagementRegistrationResponse {
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/unban", Description: "Unban one Grok account and re-enable it in CPA."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/unban-all", Description: "Unban all Grok accounts tracked by autoban."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/autoban-settings", Description: "Update autoban enabled switch and fallback hours."},
+			{Method: http.MethodPost, Path: managementRoutePrefix + "/schedule-settings", Description: "Update scheduled inspection enabled switch and interval minutes."},
 		},
 		Resources: []pluginapi.ResourceRoute{
 			{
@@ -294,6 +297,66 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 			status = http.StatusBadRequest
 		}
 		return jsonResponse(status, map[string]any{"error": err.Error(), "ok": false})
+	case method == http.MethodPost && matchesManagementPath(req.Path, "/schedule-settings"):
+		body := map[string]any{}
+		if len(req.Body) > 0 {
+			if err := json.Unmarshal(req.Body, &body); err != nil {
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": err.Error(), "ok": false})
+			}
+		}
+		var enabled *bool
+		var interval *int
+		if raw, ok := body["enabled"]; ok {
+			if v, ok := raw.(bool); ok {
+				enabled = &v
+			}
+		}
+		if enabled == nil {
+			if raw, ok := body["schedule_enabled"]; ok {
+				if v, ok := raw.(bool); ok {
+					enabled = &v
+				}
+			}
+		}
+		if raw, ok := body["interval_minutes"]; ok {
+			n, okN := parseJSONInt(raw)
+			if !okN {
+				return jsonResponse(http.StatusBadRequest, map[string]any{
+					"error": fmt.Sprintf("schedule_interval_minutes must be an integer between %d and %d", minScheduleIntervalMinutes, maxScheduleIntervalMinutes),
+					"ok":    false,
+				})
+			}
+			interval = &n
+		}
+		if interval == nil {
+			if raw, ok := body["schedule_interval_minutes"]; ok {
+				n, okN := parseJSONInt(raw)
+				if !okN {
+					return jsonResponse(http.StatusBadRequest, map[string]any{
+						"error": fmt.Sprintf("schedule_interval_minutes must be an integer between %d and %d", minScheduleIntervalMinutes, maxScheduleIntervalMinutes),
+						"ok":    false,
+					})
+				}
+				interval = &n
+			}
+		}
+		if enabled == nil && interval == nil {
+			return jsonResponse(http.StatusBadRequest, map[string]any{"error": "missing_settings", "ok": false})
+		}
+		cfg, err := updateScheduleSettings(enabled, interval)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "schedule_interval_minutes") {
+				status = http.StatusBadRequest
+			}
+			return jsonResponse(status, map[string]any{"error": err.Error(), "ok": false})
+		}
+		return jsonResponse(http.StatusOK, map[string]any{
+			"ok":               true,
+			"enabled":          cfg.ScheduleEnabled,
+			"interval_minutes": cfg.ScheduleIntervalMinutes,
+			"schedule":         scheduleStatus(),
+		})
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/unban-all"):
 		// Async bulk unban so large ban pools do not block the Management handler.
 		password := resolveManagementPassword(req.Headers)
@@ -402,4 +465,28 @@ func peekJSONLang(body []byte) Lang {
 		return LangEN
 	}
 	return LangZH
+}
+
+// parseJSONInt accepts JSON numbers that decode as float64/int/json.Number.
+// Non-integers (1.5) are rejected.
+func parseJSONInt(raw any) (int, bool) {
+	switch v := raw.(type) {
+	case float64:
+		if v != float64(int(v)) {
+			return 0, false
+		}
+		return int(v), true
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case json.Number:
+		i64, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(i64), true
+	default:
+		return 0, false
+	}
 }

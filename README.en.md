@@ -113,6 +113,7 @@ Inspection and bulk actions run in the background. Closing or switching pages do
 - Results are stored at `data/grok-inspection/results.json` under the CPA working directory
 - Result files store display fields only, not full tokens
 - Real-time autoban is on by default: free-usage-exhausted / permission-denied / 401 are auto-disabled (toggle off on the Autoban page). Inspection suggested actions still require confirmation
+- Scheduled inspection is off by default; enable it on the inspection page. Each tick runs a full scan (no disabled accounts, 16 workers) and auto-applies recommended actions (including delete). Automatic delete needs the management key env vars
 - Delete removes the CPA auth credential; recovery requires re-login
 
 ## License

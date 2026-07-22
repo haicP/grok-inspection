@@ -13,19 +13,23 @@ import (
 )
 
 type pluginConfig struct {
-	FallbackHours int
-	PersistState  bool
-	StateFile     string
-	LogMatches    bool
-	Enabled       bool
+	FallbackHours           int
+	PersistState            bool
+	StateFile               string
+	LogMatches              bool
+	Enabled                 bool
+	ScheduleEnabled         bool
+	ScheduleIntervalMinutes int
 }
 
 type configYAML struct {
-	FallbackHours int    `yaml:"fallback_hours"`
-	PersistState  *bool  `yaml:"persist_state"`
-	StateFile     string `yaml:"state_file"`
-	LogMatches    *bool  `yaml:"log_matches"`
-	Enabled       *bool  `yaml:"autoban_enabled"`
+	FallbackHours           int    `yaml:"fallback_hours"`
+	PersistState            *bool  `yaml:"persist_state"`
+	StateFile               string `yaml:"state_file"`
+	LogMatches              *bool  `yaml:"log_matches"`
+	Enabled                 *bool  `yaml:"autoban_enabled"`
+	ScheduleEnabled         *bool  `yaml:"schedule_enabled"`
+	ScheduleIntervalMinutes int    `yaml:"schedule_interval_minutes"`
 }
 
 type lifecycleRequest struct {
@@ -36,8 +40,10 @@ type lifecycleRequest struct {
 // runtimeSettings holds UI-persisted overrides (toggle switch etc.).
 // Survives CPA restart; applied after host YAML so in-page choices stick.
 type runtimeSettings struct {
-	AutobanEnabled *bool `json:"autoban_enabled,omitempty"`
-	FallbackHours  *int  `json:"fallback_hours,omitempty"`
+	AutobanEnabled          *bool `json:"autoban_enabled,omitempty"`
+	FallbackHours           *int  `json:"fallback_hours,omitempty"`
+	ScheduleEnabled         *bool `json:"schedule_enabled,omitempty"`
+	ScheduleIntervalMinutes *int  `json:"schedule_interval_minutes,omitempty"`
 }
 
 var currentConfig atomic.Value
@@ -46,14 +52,29 @@ func init() {
 	currentConfig.Store(defaultPluginConfig())
 }
 
+const (
+	defaultScheduleIntervalMinutes = 30
+	minScheduleIntervalMinutes     = 5
+	maxScheduleIntervalMinutes     = 1440
+)
+
 func defaultPluginConfig() pluginConfig {
 	return pluginConfig{
-		FallbackHours: 24,
-		PersistState:  true,
-		StateFile:     defaultBanStateFile(),
-		LogMatches:    true,
-		Enabled:       true,
+		FallbackHours:           24,
+		PersistState:            true,
+		StateFile:               defaultBanStateFile(),
+		LogMatches:              true,
+		Enabled:                 true,
+		ScheduleEnabled:         false,
+		ScheduleIntervalMinutes: defaultScheduleIntervalMinutes,
 	}
+}
+
+func normalizeScheduleIntervalMinutes(n int) (int, bool) {
+	if n < minScheduleIntervalMinutes || n > maxScheduleIntervalMinutes {
+		return 0, false
+	}
+	return n, true
 }
 
 func defaultBanStateFile() string {
@@ -121,6 +142,12 @@ func decodeConfig(raw []byte) (pluginConfig, error) {
 			if parsed, err := strconv.ParseBool(value); err == nil {
 				decoded.Enabled = &parsed
 			}
+		case "schedule_enabled":
+			if parsed, err := strconv.ParseBool(value); err == nil {
+				decoded.ScheduleEnabled = &parsed
+			}
+		case "schedule_interval_minutes":
+			decoded.ScheduleIntervalMinutes, _ = strconv.Atoi(value)
 		}
 	}
 	if decoded.FallbackHours >= 1 && decoded.FallbackHours <= 168 {
@@ -137,6 +164,12 @@ func decodeConfig(raw []byte) (pluginConfig, error) {
 	}
 	if decoded.Enabled != nil {
 		cfg.Enabled = *decoded.Enabled
+	}
+	if decoded.ScheduleEnabled != nil {
+		cfg.ScheduleEnabled = *decoded.ScheduleEnabled
+	}
+	if n, ok := normalizeScheduleIntervalMinutes(decoded.ScheduleIntervalMinutes); ok {
+		cfg.ScheduleIntervalMinutes = n
 	}
 	return cfg, nil
 }
@@ -162,6 +195,14 @@ func applyRuntimeSettings(cfg pluginConfig) pluginConfig {
 	if rs.FallbackHours != nil && *rs.FallbackHours >= 1 && *rs.FallbackHours <= 168 {
 		cfg.FallbackHours = *rs.FallbackHours
 	}
+	if rs.ScheduleEnabled != nil {
+		cfg.ScheduleEnabled = *rs.ScheduleEnabled
+	}
+	if rs.ScheduleIntervalMinutes != nil {
+		if n, ok := normalizeScheduleIntervalMinutes(*rs.ScheduleIntervalMinutes); ok {
+			cfg.ScheduleIntervalMinutes = n
+		}
+	}
 	return cfg
 }
 
@@ -175,9 +216,13 @@ func saveRuntimeSettings(cfg pluginConfig) error {
 	}
 	enabled := cfg.Enabled
 	hours := cfg.FallbackHours
+	schedEnabled := cfg.ScheduleEnabled
+	schedInterval := cfg.ScheduleIntervalMinutes
 	payload := runtimeSettings{
-		AutobanEnabled: &enabled,
-		FallbackHours:  &hours,
+		AutobanEnabled:          &enabled,
+		FallbackHours:           &hours,
+		ScheduleEnabled:         &schedEnabled,
+		ScheduleIntervalMinutes: &schedInterval,
 	}
 	raw, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -205,6 +250,27 @@ func updateAutobanSettings(enabled *bool, fallbackHours *int) (pluginConfig, err
 	return cfg, nil
 }
 
+// updateScheduleSettings applies scheduled-inspection toggle / interval and persists.
+func updateScheduleSettings(enabled *bool, intervalMinutes *int) (pluginConfig, error) {
+	cfg := loadedConfig()
+	if enabled != nil {
+		cfg.ScheduleEnabled = *enabled
+	}
+	if intervalMinutes != nil {
+		n, ok := normalizeScheduleIntervalMinutes(*intervalMinutes)
+		if !ok {
+			return cfg, fmt.Errorf("schedule_interval_minutes must be an integer between %d and %d", minScheduleIntervalMinutes, maxScheduleIntervalMinutes)
+		}
+		cfg.ScheduleIntervalMinutes = n
+	}
+	if err := saveRuntimeSettings(cfg); err != nil {
+		return cfg, err
+	}
+	currentConfig.Store(cfg)
+	notifyScheduleConfigChanged()
+	return cfg, nil
+}
+
 func configure(raw []byte) error {
 	var req lifecycleRequest
 	if len(raw) > 0 {
@@ -220,6 +286,8 @@ func configure(raw []byte) error {
 	cfg = applyRuntimeSettings(cfg)
 	currentConfig.Store(cfg)
 	loadBanState(cfg)
+	startScheduleLoop()
+	notifyScheduleConfigChanged()
 	return nil
 }
 

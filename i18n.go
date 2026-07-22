@@ -158,6 +158,14 @@ var messages = map[string]map[Lang]string{
 		LangZH: "是否记录自动禁用命中日志。",
 		LangEN: "Log auto-ban match events.",
 	},
+	"cfg_schedule_enabled": {
+		LangZH: "是否启用定时全量巡检（默认关闭）。",
+		LangEN: "Enable scheduled full inspection (default off).",
+	},
+	"cfg_schedule_interval_minutes": {
+		LangZH: "定时巡检间隔（分钟），默认 30，范围 5–1440。",
+		LangEN: "Scheduled inspection interval in minutes (default 30, range 5–1440).",
+	},
 	"save_autoban_state_failed": {
 		LangZH: "保存自动禁用状态失败: %s",
 		LangEN: "Failed to save auto-ban state: %s",
@@ -303,6 +311,7 @@ func localizeKnownReason(lang Lang, reason string) string {
 			"http_probe_timeout", "probe_timeout",
 			"act_disable", "act_enable", "act_delete", "apply_delete_batch",
 			"cfg_autoban_enabled", "cfg_fallback_hours", "cfg_persist_state", "cfg_state_file", "cfg_log_matches",
+			"cfg_schedule_enabled", "cfg_schedule_interval_minutes",
 			"save_autoban_state_failed":
 			continue
 		}

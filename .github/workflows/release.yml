@@ -68,6 +68,12 @@ jobs:
           go-version: "1.22.x"
           cache: false
 
+      - name: Install Linux C toolchain
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
       - name: Test
         run: go test ./... -count=1
 

@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestDefaultConfig(t *testing.T) {
 	got := defaultPluginConfig()
@@ -18,6 +21,12 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if !got.LogMatches {
 		t.Fatal("log matches = false, want true")
+	}
+	if got.ScheduleEnabled {
+		t.Fatal("schedule enabled = true, want false")
+	}
+	if got.ScheduleIntervalMinutes != 30 {
+		t.Fatalf("schedule interval = %d, want 30", got.ScheduleIntervalMinutes)
 	}
 }
 
@@ -92,5 +101,67 @@ func TestConfigureLoadsLifecycleYAML(t *testing.T) {
 	got := loadedConfig()
 	if got.FallbackHours != 72 || got.PersistState {
 		t.Fatalf("loaded config = %#v", got)
+	}
+}
+
+func TestDecodeConfigSchedule(t *testing.T) {
+	got, err := decodeConfig([]byte("schedule_enabled: true\nschedule_interval_minutes: 60\n"))
+	if err != nil {
+		t.Fatalf("decodeConfig() error = %v", err)
+	}
+	if !got.ScheduleEnabled || got.ScheduleIntervalMinutes != 60 {
+		t.Fatalf("config = %#v", got)
+	}
+
+	// Invalid interval keeps default 30.
+	got2, err := decodeConfig([]byte("schedule_interval_minutes: 2\n"))
+	if err != nil {
+		t.Fatalf("decodeConfig() error = %v", err)
+	}
+	if got2.ScheduleIntervalMinutes != 30 {
+		t.Fatalf("invalid interval should keep default 30, got %d", got2.ScheduleIntervalMinutes)
+	}
+
+	// CPA top-level enabled must not enable schedule.
+	got3, err := decodeConfig([]byte("enabled: true\n"))
+	if err != nil {
+		t.Fatalf("decodeConfig() error = %v", err)
+	}
+	if got3.ScheduleEnabled {
+		t.Fatal("CPA top-level enabled must not enable schedule")
+	}
+}
+
+func TestUpdateScheduleSettingsPersists(t *testing.T) {
+	dir := t.TempDir()
+	old := loadedConfig()
+	cfg := old
+	cfg.StateFile = filepath.Join(dir, "bans.json")
+	cfg.ScheduleEnabled = false
+	cfg.ScheduleIntervalMinutes = 30
+	currentConfig.Store(cfg)
+	t.Cleanup(func() { currentConfig.Store(old) })
+
+	on := true
+	interval := 45
+	got, err := updateScheduleSettings(&on, &interval)
+	if err != nil {
+		t.Fatalf("updateScheduleSettings() error = %v", err)
+	}
+	if !got.ScheduleEnabled || got.ScheduleIntervalMinutes != 45 {
+		t.Fatalf("got = %#v", got)
+	}
+	// Autoban fields preserved.
+	if got.Enabled != old.Enabled {
+		t.Fatalf("autoban enabled changed: %#v vs %#v", got.Enabled, old.Enabled)
+	}
+	rs := loadRuntimeSettings(runtimeSettingsFile(got))
+	if rs.ScheduleEnabled == nil || !*rs.ScheduleEnabled || rs.ScheduleIntervalMinutes == nil || *rs.ScheduleIntervalMinutes != 45 {
+		t.Fatalf("runtime settings = %#v", rs)
+	}
+
+	bad := 3
+	if _, err := updateScheduleSettings(nil, &bad); err == nil {
+		t.Fatal("expected interval validation error")
 	}
 }

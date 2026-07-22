@@ -47,8 +47,9 @@ The Management API base is `/v0/management/plugins/grok-inspection`.
 | `POST` | `/stop` | Stop scheduling new inspection work |
 | `POST` | `/apply` | Apply recommended or forced bulk actions asynchronously |
 | `POST` | `/action` | Run one row action asynchronously |
+| `POST` | `/schedule-settings` | Enable/disable scheduled inspection and set interval minutes |
 
-`/status` supports light polling with `include_results=0` or `light=1`. Light status omits the full result list and is used while inspection or actions are running.
+`/status` supports light polling with `include_results=0` or `light=1`. Light status omits the full result list and is used while inspection or actions are running. Status also includes a `schedule` object (`enabled`, `interval_minutes`, `next_at`, last run fields).
 
 ## Inspection Flow
 
@@ -134,6 +135,17 @@ The engine keeps all mutable state behind a mutex and exposes snapshots to the U
 Stop is cooperative: no new accounts are scheduled; in-flight probes still complete and are written; unscheduled accounts are recorded as cancelled (已停止，未探测) so progress can reach total.
 
 Source layout: engine.go (job lifecycle), probe.go (HTTP probe), identity.go (account matching), pply.go (bulk/row actions), management.go (CPA management HTTP).
+
+
+## Scheduled Inspection
+
+Plugin-local ticker (does **not** use CPA `scheduler` capability):
+
+- Default **off**; interval default **30 minutes** (range 5–1440); UI/YAML keys `schedule_enabled`, `schedule_interval_minutes`.
+- Each tick: full inspection with **16 workers**, `include_disabled=false`, then auto `/apply` of all recommended actions (disable/enable/delete).
+- If the engine is busy (inspection, apply, row action, unban) or a previous schedule cycle is still running, the tick is **skipped**.
+- Enabling or changing the interval sets `next_at = now + interval` (no immediate run on enable).
+- Headless apply uses `MANAGEMENT_PASSWORD` / `CPA_MANAGEMENT_KEY`.
 
 ## Internationalization (i18n)
 

@@ -946,8 +946,9 @@ func renderUIPage(pluginID string) []byte {
     return reasonText('list_accounts_failed_prefix') + detail;
   }
   function localizeKnownReason(reason) {
-    reason = String(reason == null ? '' : reason).trim();
-    if (!reason) return reason;
+    const original = (reason == null) ? '' : String(reason);
+    reason = original.trim();
+    if (!reason) return original;
     const catalogs = [REASON_I18N.zh, REASON_I18N.en];
     const skip = {
       fallback_disagreed:1, list_accounts_timeout:1, list_accounts_failed_prefix:1,
@@ -1016,12 +1017,14 @@ func renderUIPage(pluginID string) []byte {
         if (key === 'list_accounts_timeout' && reason === cat[key]) return reasonText(key);
       }
     }
-    return reason;
+    // Unknown free-form diagnostics keep original leading/trailing whitespace.
+    return original;
   }
 
   function localizeKnownActionError(msg) {
-    msg = String(msg == null ? '' : msg).trim();
-    if (!msg) return msg;
+    const original = (msg == null) ? '' : String(msg);
+    msg = original.trim();
+    if (!msg) return original;
     const catalogs = [REASON_I18N.zh, REASON_I18N.en];
     function matchWhole(m) {
       // exact stopped / list timeout / auth file name missing / mgmt password
@@ -1100,7 +1103,8 @@ func renderUIPage(pluginID string) []byte {
     // reuse reason localizer for Stopped / timeouts / etc.
     const viaReason = localizeKnownReason(msg);
     if (viaReason !== msg) return viaReason;
-    return msg;
+    // Unknown free-form diagnostics keep original leading/trailing whitespace.
+    return original;
   }
 
   function setLang(next) {

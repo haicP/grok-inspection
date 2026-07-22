@@ -1053,3 +1053,114 @@ func TestBanPagerFilterParensAreI18n(t *testing.T) {
 		t.Fatalf("en pager_filter_* = %q/%q, want ASCII parentheses with leading space on open", en["pager_filter_prefix"], en["pager_filter_suffix"])
 	}
 }
+
+func TestStartSuccessLocalizesRetainedResults(t *testing.T) {
+	old := engine
+	oldList := callHostAuthListFn
+	// Block auth list so the immediate /start response still holds prior rows.
+	block := make(chan struct{})
+	callHostAuthListFn = func() (authListResponse, error) {
+		<-block
+		return authListResponse{}, nil
+	}
+	engine = &inspectionEngine{
+		workers: defaultWorkers,
+		lang:    LangZH,
+		results: []accountResult{{
+			Name:           "hist",
+			AuthIndex:      "h1",
+			Classification: "quota_exhausted",
+			Action:         "disable",
+			Reason:         T(LangZH, "quota_exhausted"),
+		}},
+	}
+	t.Cleanup(func() {
+		close(block)
+		// stop any started run
+		engine.stop()
+		engine.runWG.Wait()
+		callHostAuthListFn = oldList
+		engine = old
+	})
+
+	resp := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodPost,
+		Path:   "/v0/management/plugins/grok-inspection/start",
+		Body:   []byte(`{"workers":2,"lang":"en"}`),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("start status=%d body=%s", resp.StatusCode, string(resp.Body))
+	}
+	var payload struct {
+		Running bool `json:"running"`
+		Results []struct {
+			Reason string `json:"reason"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(resp.Body, &payload); err != nil {
+		t.Fatalf("unmarshal: %v body=%s", err, string(resp.Body))
+	}
+	if !payload.Running {
+		t.Fatal("expected async start to mark running")
+	}
+	if len(payload.Results) != 1 {
+		t.Fatalf("results len=%d body=%s", len(payload.Results), string(resp.Body))
+	}
+	want := T(LangEN, "quota_exhausted")
+	if payload.Results[0].Reason != want {
+		t.Fatalf("immediate start reason = %q, want %q (request-scoped lang)", payload.Results[0].Reason, want)
+	}
+}
+
+func TestLocalizeUnknownPreservesWhitespace(t *testing.T) {
+	unknowns := []string{
+		"  upstream TLS handshake failed  ",
+		"\tCPA management API returned HTTP 500: boom\n",
+		"   ",
+	}
+	for _, u := range unknowns {
+		if got := localizeKnownReason(LangEN, u); got != u {
+			t.Fatalf("localizeKnownReason altered unknown: %q => %q", u, got)
+		}
+		if got := localizeKnownReason(LangZH, u); got != u {
+			t.Fatalf("localizeKnownReason zh altered unknown: %q => %q", u, got)
+		}
+		if got := localizeKnownActionError(LangEN, u); got != u {
+			t.Fatalf("localizeKnownActionError altered unknown: %q => %q", u, got)
+		}
+		if got := localizeKnownActionError(LangZH, u); got != u {
+			t.Fatalf("localizeKnownActionError zh altered unknown: %q => %q", u, got)
+		}
+	}
+	// Known reasons still match after surrounding whitespace (existing trim-for-match semantics).
+	padded := "  " + T(LangZH, "quota_exhausted") + "  "
+	if got := localizeKnownReason(LangEN, padded); got != T(LangEN, "quota_exhausted") {
+		t.Fatalf("padded known reason = %q", got)
+	}
+}
+
+func TestUILocalizersPreserveUnknownWhitespace(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	// Structural: both JS localizers keep original and return it on unknown fallback.
+	for _, fn := range []string{"function localizeKnownReason(", "function localizeKnownActionError("} {
+		idx := strings.Index(page, fn)
+		if idx < 0 {
+			t.Fatalf("missing %s", fn)
+		}
+		// Look at a window after the function start for original/trim/return original.
+		window := page[idx : idx+900]
+		if !strings.Contains(window, "const original =") {
+			t.Fatalf("%s must capture original before trim", fn)
+		}
+		if !strings.Contains(window, ".trim()") {
+			t.Fatalf("%s must trim a copy for matching", fn)
+		}
+	}
+	// Unknown fallback returns original (not the trimmed variable alone).
+	if !strings.Contains(page, "Unknown free-form diagnostics keep original leading/trailing whitespace.") {
+		t.Fatal("JS localizers must document/preserve original whitespace on unknown fallback")
+	}
+	if strings.Count(page, "return original;") < 2 {
+		t.Fatalf("expected both JS localizers to return original on empty/unknown paths, count=%d", strings.Count(page, "return original;"))
+	}
+}

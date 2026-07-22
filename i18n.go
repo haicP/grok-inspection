@@ -281,9 +281,11 @@ func T(lang Lang, key string, args ...any) string {
 // localizeKnownReason rewrites a previously stored reason into the requested language
 // when it matches a known catalog value. Unknown free-form text is left unchanged.
 func localizeKnownReason(lang Lang, reason string) string {
+	original := reason
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		return reason
+		// Preserve pure whitespace / empty unknown diagnostics.
+		return original
 	}
 	lang = normalizeLang(string(lang))
 
@@ -339,7 +341,8 @@ func localizeKnownReason(lang Lang, reason string) string {
 			}
 		}
 	}
-	return reason
+	// Unknown free-form diagnostics must keep original leading/trailing whitespace.
+	return original
 }
 
 // localizeFormattedReason rewrites sprintf-style stored reasons (timeouts, list failures).
@@ -447,9 +450,10 @@ func splitMethodURL(tail string) (method, url string, ok bool) {
 // localizeKnownActionError rewrites plugin-generated fixed action/status errors
 // into the requested language. Unknown CPA/HTTP/network free text is preserved.
 func localizeKnownActionError(lang Lang, msg string) string {
+	original := msg
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
-		return msg
+		return original
 	}
 	lang = normalizeLang(string(lang))
 
@@ -476,7 +480,8 @@ func localizeKnownActionError(lang Lang, msg string) string {
 	if out, ok := localizeApplyProgressMessage(lang, msg); ok {
 		return out
 	}
-	return msg
+	// Unknown free-form diagnostics must keep original leading/trailing whitespace.
+	return original
 }
 
 func looksLikeAccountErrorPrefix(left string) bool {

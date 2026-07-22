@@ -134,7 +134,9 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 			status := statusFromError(err, http.StatusConflict)
 			return jsonResponse(status, map[string]any{"error": err.Error()})
 		}
-		return jsonResponse(http.StatusOK, engine.snapshot(true))
+		// Localize any retained prior results into the request language immediately
+		// (full inspect keeps previous rows until the auth list phase succeeds).
+		return jsonResponse(http.StatusOK, engine.snapshotWithLang(true, body.Lang))
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/stop"):
 		var body stopRequest
 		if len(req.Body) > 0 {

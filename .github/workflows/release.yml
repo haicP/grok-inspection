@@ -9,7 +9,7 @@ on:
       tag:
         description: Existing release tag to build or repair
         required: true
-        default: v0.1.8
+        default: v2.1.14
 
 permissions:
   contents: write
@@ -78,37 +78,50 @@ jobs:
         run: go test ./... -count=1
 
       - name: Build dynamic library
+        id: build
         shell: bash
         env:
           CGO_ENABLED: "1"
+          VERSION: ${{ steps.release.outputs.version }}
+          GOOS_NAME: ${{ matrix.goos }}
+          GOARCH_NAME: ${{ matrix.goarch }}
+          EXT: ${{ matrix.ext }}
         run: |
           # Native runner per OS; do not cross-compile with CGO.
+          plugin="grok-inspection.${EXT}"
+          versioned="grok-inspection_${VERSION}_${GOOS_NAME}_${GOARCH_NAME}.${EXT}"
           go build \
             -buildvcs=false \
             -buildmode=c-shared \
-            -o "grok-inspection.${{ matrix.ext }}" \
+            -o "${plugin}" \
             .
-
-      - name: Verify target platform
-        shell: bash
-        run: |
-          go version -m "grok-inspection.${{ matrix.ext }}" | tee build-info.txt
-          grep -q "GOOS=${{ matrix.goos }}" build-info.txt
-          grep -q "GOARCH=${{ matrix.goarch }}" build-info.txt
+          cp "${plugin}" "${versioned}"
+          go version -m "${plugin}" | tee build-info.txt
+          grep -q "GOOS=${GOOS_NAME}" build-info.txt
+          grep -q "GOARCH=${GOARCH_NAME}" build-info.txt
+          echo "plugin=${plugin}" >> "$GITHUB_OUTPUT"
+          echo "versioned=${versioned}" >> "$GITHUB_OUTPUT"
+          echo "zip=grok-inspection_${VERSION}_${GOOS_NAME}_${GOARCH_NAME}.zip" >> "$GITHUB_OUTPUT"
 
       - name: Pack archive
         id: package
         shell: pwsh
+        env:
+          PLUGIN: ${{ steps.build.outputs.plugin }}
+          VERSIONED: ${{ steps.build.outputs.versioned }}
+          ZIP: ${{ steps.build.outputs.zip }}
         run: |
-          $asset = "grok-inspection_${{ steps.release.outputs.version }}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
-          Compress-Archive -Path "grok-inspection.${{ matrix.ext }}" -DestinationPath $asset -Force
-          "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Compress-Archive -Path $env:PLUGIN,$env:VERSIONED,build-info.txt -DestinationPath $env:ZIP -Force
+          "asset=$env:ZIP" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.package.outputs.asset }}
-          path: ${{ steps.package.outputs.asset }}
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            ${{ steps.build.outputs.versioned }}
+            ${{ steps.build.outputs.zip }}
+            build-info.txt
           if-no-files-found: error
 
   release:
@@ -128,6 +141,7 @@ jobs:
             tag="${INPUT_TAG}"
           fi
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout release notes
         uses: actions/checkout@v5
@@ -157,7 +171,12 @@ jobs:
         shell: bash
         run: |
           cd assets
-          sha256sum *.zip > checksums.txt
+          ls -la
+          # checksums for every plugin binary and zip
+          : > checksums.txt
+          find . -maxdepth 1 -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' -o -name '*.zip' \)             | sed 's|^./||' | sort | while read -r f; do
+              sha256sum "$f" >> checksums.txt
+            done
           cat checksums.txt
 
       - name: Upload assets to GitHub Release
@@ -168,15 +187,21 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_NOTES_FILE: ${{ steps.notes.outputs.file }}
         run: |
+          shopt -s nullglob
+          files=(assets/*.{so,dylib,dll,zip} assets/checksums.txt)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "no release assets found" >&2
+            exit 1
+          fi
+          # Prefer bare plugin binaries on the release page (plus zip + checksums).
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             gh release edit "${RELEASE_TAG}" \
               --title "Grok Inspection ${RELEASE_TAG}" \
               --notes-file "${RELEASE_NOTES_FILE}"
-            gh release upload "${RELEASE_TAG}" assets/*.zip assets/checksums.txt --clobber
+            gh release upload "${RELEASE_TAG}" "${files[@]}" --clobber
           else
             gh release create "${RELEASE_TAG}" \
               --title "Grok Inspection ${RELEASE_TAG}" \
               --notes-file "${RELEASE_NOTES_FILE}" \
-              assets/*.zip \
-              assets/checksums.txt
+              "${files[@]}"
           fi
